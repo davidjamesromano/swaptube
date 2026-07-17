@@ -43,7 +43,7 @@ R"(\begin{aligned}
 \end{aligned})"
     };
 
-    LatexScene latex(latex_strings[0], 0.6);
+    LatexScene latex(latex_strings[0], 0.2);
     stage_macroblock(SilenceBlock(1), 1);
     latex.render_microblock();
 

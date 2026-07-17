@@ -51,7 +51,7 @@ __global__ void get_bounding_box_kernel(const uint32_t* pix, const Cuda::ivec2 w
 __global__ void copy_glyph_to_gpu_kernel(const uint32_t* pix, const Cuda::ivec2 wh, const Cuda::ivec2 top_left, const Cuda::ivec2 bottom_right, uint32_t* d_glyph_pix, const uint32_t color)
 {
     Cuda::ivec2 grid_point = Cuda::ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
-    const Cuda::ivec2 glyph_wh = bottom_right - top_left;
+    const Cuda::ivec2 glyph_wh = bottom_right - top_left + Cuda::ivec2(1, 1);
     if (grid_point.x >= glyph_wh.x || grid_point.y >= glyph_wh.y) return;
     Cuda::ivec2 pix_point = top_left + grid_point;
 
@@ -358,7 +358,7 @@ extern "C" Cuda::Interpolation stage_interpolation(
         cudaMemcpy(&top_left, d_top_left, sizeof(Cuda::ivec2), cudaMemcpyDeviceToHost);
         cudaMemcpy(&bottom_right, d_bottom_right, sizeof(Cuda::ivec2), cudaMemcpyDeviceToHost);
         interpolation.glyphs_1[i].top_left = top_left;
-        interpolation.glyphs_1[i].wh = bottom_right - top_left;
+        interpolation.glyphs_1[i].wh = bottom_right - top_left + Cuda::ivec2(1, 1);
         cudaMalloc(&interpolation.glyphs_1[i].pix, interpolation.glyphs_1[i].wh.x * interpolation.glyphs_1[i].wh.y * sizeof(uint32_t));
         threads = dim3(16, 16);
         blocks = dim3((interpolation.glyphs_1[i].wh.x + threads.x - 1) / threads.x, (interpolation.glyphs_1[i].wh.y + threads.y - 1) / threads.y);
@@ -377,7 +377,7 @@ extern "C" Cuda::Interpolation stage_interpolation(
         cudaMemcpy(&top_left, d_top_left, sizeof(Cuda::ivec2), cudaMemcpyDeviceToHost);
         cudaMemcpy(&bottom_right, d_bottom_right, sizeof(Cuda::ivec2), cudaMemcpyDeviceToHost);
         interpolation.glyphs_2[i].top_left = top_left;
-        interpolation.glyphs_2[i].wh = bottom_right - top_left;
+        interpolation.glyphs_2[i].wh = bottom_right - top_left + Cuda::ivec2(1, 1);
         cudaMalloc(&interpolation.glyphs_2[i].pix, interpolation.glyphs_2[i].wh.x * interpolation.glyphs_2[i].wh.y * sizeof(uint32_t));
         threads = dim3(16, 16);
         blocks = dim3((interpolation.glyphs_2[i].wh.x + threads.x - 1) / threads.x, (interpolation.glyphs_2[i].wh.y + threads.y - 1) / threads.y);

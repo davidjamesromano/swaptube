@@ -4,7 +4,7 @@
 #include <png.h>
 #include <vector>
 #include <stdexcept>
-#include <librsvg-2.0/librsvg/rsvg.h>
+#include <librsvg/rsvg.h>
 #include <sys/stat.h>
 #include <cmath>
 #include <sstream>
@@ -20,7 +20,7 @@ void pix_to_png(const Pixels& pix, const string& filename) {
     if(pix.wh.x * pix.wh.y == 0) return; // cowardly exit.
 
 #ifdef _WIN32
-    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pix.w, pix.h);
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pix.wh.x, pix.wh.y);
     if (!surface || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
         if (surface) cairo_surface_destroy(surface);
         throw runtime_error("Failed to create cairo surface for PNG writing: " + filename);
@@ -28,9 +28,9 @@ void pix_to_png(const Pixels& pix, const string& filename) {
 
     unsigned char* data = cairo_image_surface_get_data(surface);
     const int stride = cairo_image_surface_get_stride(surface);
-    for (int y = 0; y < pix.h; y++) {
+    for (int y = 0; y < pix.wh.y; y++) {
         unsigned char* row = data + y * stride;
-        for (int x = 0; x < pix.w; x++) {
+        for (int x = 0; x < pix.wh.x; x++) {
             const int pixel = pix.get_pixel_carelessly(x, y);
             const uint8_t a = (pixel >> 24) & 0xFF;
             uint8_t r = (pixel >> 16) & 0xFF;
@@ -134,121 +134,6 @@ void pix_to_png(const Pixels& pix, const string& filename) {
     fclose(fp);
 }
 
-static gboolean get_svg_intrinsic_size(RsvgHandle *handle, gdouble* width, gdouble* height) {
-    #if LIBRSVG_CHECK_VERSION(2, 52, 0)
-        return rsvg_handle_get_intrinsic_size_in_pixels(handle, width, height);
-    #else
-        RsvgDimensionData dim;
-        rsvg_handle_get_dimensions(handle, &dim);
-        if (dim.width <= 0 || dim.height <= 0) return FALSE;
-        *width  = dim.width;
-        *height = dim.height;
-        return TRUE;
-    #endif
-}
-
-Pixels svg_to_pix(const string& filename_with_or_without_suffix, ScalingParams& scaling_params) {
-    // Check if the filename already ends with ".svg"
-    string filename = "io_in/" + filename_with_or_without_suffix;
-    if (filename.length() < 4 || filename.substr(filename.length() - 4) != ".svg") {
-        filename += ".svg";  // Append the ".svg" suffix if it's not present
-    }
-
-    // Load SVG
-    GError* error = nullptr;
-    RsvgHandle* handle = rsvg_handle_new_from_file(filename.c_str(), &error);
-    if (!handle) {
-        string error_str = "Error loading SVG file " + filename + ": " + error->message;
-        g_error_free(error);
-        throw runtime_error(error_str);
-    }
-
-    gdouble gwidth, gheight;
-    if (!get_svg_intrinsic_size(handle, &gwidth, &gheight))
-        throw runtime_error("Could not get intrinsic size of SVG file " + filename);
-
-    // Calculate scale factor
-    if (scaling_params.mode == ScalingMode::BoundingBox) {
-        scaling_params.scale_factor = min(
-            static_cast<double>(scaling_params.max_width) / gwidth,
-            static_cast<double>(scaling_params.max_height) / gheight
-        );
-    } else if (scaling_params.scale_factor <= 0) {
-        throw runtime_error("Invalid scale factor: " + to_string(scaling_params.scale_factor));
-    }
-
-    int width  = round(gwidth  * scaling_params.scale_factor);
-    int height = round(gheight * scaling_params.scale_factor);
-
-    if (width <= 0 || height <= 0) {
-        g_object_unref(handle);
-        throw runtime_error("Computed output size for SVG file " + filename + " is invalid: width=" + to_string(width) + ", height=" + to_string(height) + ", scaling factor=" + to_string(scaling_params.scale_factor));
-    }
-
-    Pixels ret(width, height);
-
-    // Allocate pixel buffer
-    vector<uint8_t> raw_data(width * height * 4, 0);
-
-    // Create cairo surface and context
-    cairo_surface_t* surface = cairo_image_surface_create_for_data(
-        raw_data.data(), CAIRO_FORMAT_ARGB32, width, height, width * 4
-    ); 
-    cairo_t* cr = cairo_create(surface);
-
-    // Set scale
-    cairo_scale(cr, scaling_params.scale_factor, scaling_params.scale_factor);
-
-    if (gwidth <= 0 || gheight <= 0) {
-        cairo_destroy(cr);
-        cairo_surface_destroy(surface);
-        g_object_unref(handle);
-        throw runtime_error("Invalid viewport size for SVG file " + filename);
-    }
-
-#if LIBRSVG_CHECK_VERSION(2, 52, 0)
-    RsvgRectangle viewport;
-    viewport.x = 0;
-    viewport.y = 0;
-    viewport.width = gwidth;
-    viewport.height = gheight;
-    if (!rsvg_handle_render_document(handle, cr, &viewport, &error)) {
-        string msg = (error != nullptr) ? error->message : "unknown error";
-        if (error != nullptr) g_error_free(error);
-        cairo_destroy(cr);
-        cairo_surface_destroy(surface);
-        g_object_unref(handle);
-        throw runtime_error("Failed to render SVG file " + filename + ": " + msg);
-    }
-#else
-    if (!rsvg_handle_render_cairo(handle, cr)) {
-        cairo_destroy(cr);
-        cairo_surface_destroy(surface);
-        g_object_unref(handle);
-        throw runtime_error("Failed to render SVG file " + filename + " using legacy librsvg API.");
-    }
-#endif
-
-    // Copy pixels into Pixels object
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            int offset = (y * width + x) * 4;
-            ret.set_pixel_carelessly(x, y, argb(
-                raw_data[offset + 3],  // Alpha
-                raw_data[offset + 2],  // Red
-                raw_data[offset + 1],  // Green
-                raw_data[offset]       // Blue
-            ));
-        }
-    }
-
-    // Cleanup
-    cairo_destroy(cr);
-    cairo_surface_destroy(surface);
-    g_object_unref(handle);
-
-    return crop_by_alpha(ret);
-}
 
 
 void png_to_pix(Pixels& pix, const string& filename_with_or_without_suffix) {
@@ -286,7 +171,7 @@ void png_to_pix(Pixels& pix, const string& filename_with_or_without_suffix) {
         throw runtime_error("Invalid PNG surface for " + fullpath);
     }
 
-    pix = Pixels(surface_width, surface_height);
+    pix = Pixels(ivec2(surface_width, surface_height));
     for (int y = 0; y < surface_height; y++) {
         unsigned char* row = data + y * stride;
         for (int x = 0; x < surface_width; x++) {
@@ -440,76 +325,6 @@ void png_to_pix_bounding_box(Pixels& pix, const string& filename, int w, int h) 
     png_bounding_box_cache[key] = pix;
 }
 
-// Create an unordered_map to store the cached results
-unordered_map<string, pair<Pixels, double>> latex_cache;
-
-static string generate_cache_key(const string& text, const ScalingParams& scaling_params) {
-    hash<string> hasher;
-    string key = text + "_" + to_string(static_cast<int>(scaling_params.mode)) + "_" + 
-                 to_string(scaling_params.max_width) + "_" + 
-                 to_string(scaling_params.max_height) + "_" + 
-                 to_string(scaling_params.scale_factor);
-    return to_string(hasher(key));
-}
-
-/*
- * We use MicroTEX to convert LaTeX equations into svg files.
- */
-Pixels latex_to_pix(const string& latex, ScalingParams& scaling_params) {
-    // Generate a cache key based on the equation and scaling parameters
-    string cache_key = generate_cache_key(latex, scaling_params);
-
-    // Check if the result is already in the cache
-    auto it = latex_cache.find(cache_key);
-    if (it != latex_cache.end()) {
-        scaling_params.scale_factor = it->second.second;
-        return it->second.first; // Return the cached Pixels object
-    }
-
-    cout << "Generating LaTeX for: " << latex << endl;
-
-    hash<string> hasher;
-    string latex_dir = "io_in/latex/";
-    string name_without_folder = to_string(hasher(latex)) + ".svg";
-    string name = (fs::absolute(latex_dir) / name_without_folder).string();
-
-    if (!fs::exists(name)) {
-#ifdef _WIN32
-        string output_name = name;
-        for (char& c : output_name) {
-            if (c == '\\') {
-                c = '/';
-            }
-        }
-        string microtex_build_dir = fs::absolute("../../MicroTeX-master/build-mingw-headless").string();
-        bool use_mingw_headless = fs::exists(microtex_build_dir);
-        if (!use_mingw_headless) {
-            microtex_build_dir = fs::absolute("../../MicroTeX-master/build").string();
-        }
-        string command =
-            "cd /d \"" + microtex_build_dir + "\" && "
-            ".\\LaTeX.exe -headless -foreground=#ffffffff "
-            "\"-input=" + latex + "\" "
-            "\"-output=" + output_name + "\"";
-#else
-        string command =
-            "cd ../../MicroTeX-master/build/ && "
-            "./LaTeX -headless -foreground=#ffffffff "
-            "\"-input=" + latex + "\" "
-            "\"-output=" + name + "\" >/dev/null 2>&1";
-#endif
-        int result = system(command.c_str());
-        if(result != 0) {
-            cout << command << endl;
-            throw runtime_error("Failed to generate LaTeX. Command printed above.");
-        }
-    }
-
-    // System call successful, return the generated SVG
-    Pixels pixels = svg_to_pix("latex/" + name_without_folder, scaling_params);
-    latex_cache[cache_key] = make_pair(pixels, scaling_params.scale_factor); // Cache the result before returning
-    return pixels;
-}
 
 
 void pdf_page_to_pix(Pixels& pix, const string& pdf_filename_without_suffix, const int page_number) {

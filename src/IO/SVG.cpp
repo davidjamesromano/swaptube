@@ -2,18 +2,93 @@
 
 #include <vector>
 #include <stdexcept>
-#include <librsvg-2.0/librsvg/rsvg.h>
+#include <librsvg/rsvg.h>
 #include <sys/stat.h>
 #include <cmath>
 #include <sstream>
 #include <unordered_map>
 #include <limits.h>
-#include <unistd.h>
+#include <filesystem>
 #include <cairo.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <iostream>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 using namespace std;
+
+#ifdef _WIN32
+static string quote_windows_argument(const string& argument) {
+    string quoted = "\"";
+    size_t backslashes = 0;
+    for (char c : argument) {
+        if (c == '\\') {
+            backslashes++;
+        } else if (c == '"') {
+            quoted.append(backslashes * 2 + 1, '\\');
+            quoted.push_back('"');
+            backslashes = 0;
+        } else {
+            quoted.append(backslashes, '\\');
+            backslashes = 0;
+            quoted.push_back(c);
+        }
+    }
+    quoted.append(backslashes * 2, '\\');
+    quoted.push_back('"');
+    return quoted;
+}
+
+static int run_microtex(
+    const filesystem::path& executable,
+    const filesystem::path& working_directory,
+    const string& latex,
+    const string& output_name
+) {
+    vector<string> arguments = {
+        executable.string(),
+        "-headless",
+        "-foreground=#ffffffff",
+        "-input=" + latex,
+        "-output=" + output_name,
+    };
+    string command_line;
+    for (const string& argument : arguments) {
+        if (!command_line.empty()) command_line.push_back(' ');
+        command_line += quote_windows_argument(argument);
+    }
+    vector<char> mutable_command_line(command_line.begin(), command_line.end());
+    mutable_command_line.push_back('\0');
+
+    STARTUPINFOA startup_info{};
+    startup_info.cb = sizeof(startup_info);
+    PROCESS_INFORMATION process_info{};
+    BOOL created = CreateProcessA(
+        executable.string().c_str(), mutable_command_line.data(),
+        nullptr, nullptr, FALSE, 0, nullptr,
+        working_directory.string().c_str(), &startup_info, &process_info
+    );
+    if (!created) {
+        throw runtime_error("Failed to start MicroTeX LaTeX.exe (Windows error " + to_string(GetLastError()) + ").");
+    }
+
+    WaitForSingleObject(process_info.hProcess, INFINITE);
+    DWORD exit_code = 1;
+    if (!GetExitCodeProcess(process_info.hProcess, &exit_code)) {
+        DWORD error = GetLastError();
+        CloseHandle(process_info.hThread);
+        CloseHandle(process_info.hProcess);
+        throw runtime_error("Failed to read MicroTeX exit code (Windows error " + to_string(error) + ").");
+    }
+    CloseHandle(process_info.hThread);
+    CloseHandle(process_info.hProcess);
+    return static_cast<int>(exit_code);
+}
+#endif
 
 string latex_color(uint32_t color, string text) {
     // Mask out the alpha channel
@@ -91,12 +166,11 @@ Pixels svg_to_pix(const string& filename_with_or_without_suffix, ScalingParams& 
     cairo_scale(cr, scaling_params.scale_factor, scaling_params.scale_factor);
 
     // Define viewport for rendering
-    RsvgRectangle viewport = {
-        .x = 0,
-        .y = 0,
-        .width = gwidth,
-        .height = gheight
-    };
+    RsvgRectangle viewport{};
+    viewport.x = 0;
+    viewport.y = 0;
+    viewport.width = gwidth;
+    viewport.height = gheight;
 
     if (viewport.width <= 0 || viewport.height <= 0) {
         cairo_destroy(cr);
@@ -181,18 +255,32 @@ Pixels latex_to_pix(const string& latex, ScalingParams& scaling_params) {
     cout << "Generating LaTeX for: " << latex << endl;
 
     hash<string> hasher;
-    char full_directory_path[PATH_MAX];
     string latex_dir = "io_in/latex/";
-    realpath(latex_dir.c_str(), full_directory_path);
+    std::filesystem::create_directories(latex_dir);
     string name_without_folder = to_string(hasher(latex)) + ".svg";
-    string name = string(full_directory_path) + "/" + name_without_folder;
+    string name = (std::filesystem::absolute(latex_dir) / name_without_folder).string();
 
-    if (access(name.c_str(), F_OK) == -1) {
+    if (!std::filesystem::exists(name)) {
+#ifdef _WIN32
+        string output_name = name;
+        for (char& c : output_name) {
+            if (c == '\\') c = '/';
+        }
+        string microtex_build_dir = std::filesystem::absolute("../../MicroTeX-master/build-mingw-headless").string();
+        if (!std::filesystem::exists(microtex_build_dir)) {
+            microtex_build_dir = std::filesystem::absolute("../../MicroTeX-master/build").string();
+        }
+        filesystem::path microtex_executable = filesystem::path(microtex_build_dir) / "LaTeX.exe";
+        int result = run_microtex(microtex_executable, microtex_build_dir, latex, output_name);
+#else
         string command = "cd ../../MicroTeX-master/build/ && ./LaTeX -headless -foreground=#ffffffff \"-input=" + latex + "\" -output=" + name + " >/dev/null 2>&1";
         int result = system(command.c_str());
+#endif
         if(result != 0) {
+#ifndef _WIN32
             cout << command << endl;
-            throw runtime_error("Failed to generate LaTeX. Command printed above.");
+#endif
+            throw runtime_error("Failed to generate LaTeX (MicroTeX exit code " + to_string(result) + ").");
         }
     }
 

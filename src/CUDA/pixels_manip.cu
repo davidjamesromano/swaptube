@@ -216,13 +216,14 @@ extern "C" void cuda_overlay (
     // Functionally equivalent to cuda_overlay, but the foreground is rotated about its center
     // by the specified angle (in radians) before being overlaid onto the background.
     if (opacity == 0.0f) return;
-    float angle_mod = Cuda::extended_mod(angle_rad, 2.0f * M_PI);
+    const float full_turn = 2.0f * static_cast<float>(M_PI);
+    float angle_mod = Cuda::extended_mod(angle_rad, full_turn);
 
     // TODO instead use the envelope surrounding the rotation INTERSECT the background itself
     dim3 blockSize(16, 16);
     dim3 numBlocks((b_wh.x + blockSize.x - 1) / blockSize.x, (b_wh.y + blockSize.y - 1) / blockSize.y);
     const float epsilon = 0.001f;
-    if (angle_mod < epsilon || angle_mod > (2.0f * M_PI - epsilon)) {
+    if (angle_mod < epsilon || angle_mod > (full_turn - epsilon)) {
         // If angle is effectively 0, skip rotation math and just do normal overlay
         overlay_kernel<<<numBlocks, blockSize>>>(
             background, b_wh,

@@ -88,3 +88,4 @@ public:
 // Free functions
 Pixels create_alpha_from_intensities(const vector<vector<unsigned int>>& intensities);
 Pixels create_pixels_from_2d_vector(const vector<vector<unsigned int>>& colors, int negative_intensity);
+Pixels crop_by_alpha(const Pixels& p);

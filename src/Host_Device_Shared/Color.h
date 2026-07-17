@@ -40,8 +40,8 @@ HOST_DEVICE inline uint32_t color_combine(int base_color, int over_color, float 
 }
 
 HOST_DEVICE inline uint32_t black_to_blue_to_white(double w){
-    int rainbow_part1 = max(0.,min(1.,w*2-0))*255.;
-    int rainbow_part2 = max(0.,min(1.,w*2-1))*255.;
+    int rainbow_part1 = clamp(w*2-0, 0., 1.)*255.;
+    int rainbow_part2 = clamp(w*2-1, 0., 1.)*255.;
     return argb(255, rainbow_part2, rainbow_part2, rainbow_part1);
 }
 
@@ -82,8 +82,8 @@ HOST_DEVICE inline uint32_t pendulum_color(double angle1, double angle2, double 
     float sa1 = sin(angle1) + 0.000001;
     float sa2 = sin(angle2);
     float h = atan2(sa2, sa1)/6.283+1;
-    float s = min((square(sa1) + square(sa2))*5.,1.);
-    float v = 1-min(.1 * sqrt(p1*p1+p2*p2), 1.0);
+    float s = clamp((square(sa1) + square(sa2))*5., 0., 1.);
+    float v = 1-clamp(.1 * sqrt(p1*p1+p2*p2), 0.0, 1.0);
     return HSVtoRGB(h, s, v);
 }
 

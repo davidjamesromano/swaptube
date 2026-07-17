@@ -12,7 +12,7 @@ extern "C" void cuda_overlay (
     const Cuda::vec2& center, const float opacity, const float angle_rad);
 
 const int MAX_TNF_DEPTH = 20;
-const float INF = 10000000000000.0f;
+constexpr float INF = 10000000000000.0f;
 const int half_tape_length = 20;
 
 struct RayState {
@@ -293,9 +293,7 @@ extern "C" void beaver_TNF_3D_cuda(
     int* d_action_path;
     cudaMalloc(&d_action_path, action.size() * sizeof(int));
 
-    int action_path[action.size()];
-    for (int i=0; i<action.size(); i++) action_path[i] = action[i];
-    cudaMemcpy(d_action_path, action_path, action.size() * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_action_path, action.data(), action.size() * sizeof(int), cudaMemcpyHostToDevice);
 
     dim3 threads(16, 16);
     dim3 block((w + threads.x - 1) / threads.x, (h + threads.y - 1) / threads.y);

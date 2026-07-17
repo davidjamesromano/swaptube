@@ -452,6 +452,8 @@ void Pixels::bicubic_scale(int new_width, int new_height, Pixels& result) const 
 }
 
 void Pixels::print_to_terminal() {
+    if (std::getenv("SWAPTUBE_QUIET")) return;
+
     // Print an empty line first.
     cout << endl;
 
@@ -578,14 +580,14 @@ Pixels create_pixels_from_2d_vector(const vector<vector<unsigned int>>& colors, 
 }
 
 Pixels crop_by_alpha(const Pixels& p) {
-    int min_x = p.w;
-    int min_y = p.h;
+    int min_x = p.wh.x;
+    int min_y = p.wh.y;
     int max_x = -1;
     int max_y = -1;
 
     // Find the bounding box of non-zero alpha pixels
-    for (int y = 0; y < p.h; y++) {
-        for (int x = 0; x < p.w; x++) {
+    for (int y = 0; y < p.wh.y; y++) {
+        for (int x = 0; x < p.wh.x; x++) {
             if (p.get_alpha(x, y) > 0) {
                 min_x = min(min_x, x);
                 min_y = min(min_y, y);
@@ -605,7 +607,7 @@ Pixels crop_by_alpha(const Pixels& p) {
     int height = max_y - min_y + 1;
 
     // Create the cropped Pixels object
-    Pixels cropped_pixels(width, height);
+    Pixels cropped_pixels(ivec2(width, height));
 
     // Copy the pixels within the bounding box to the cropped Pixels
     for (int y = min_y; y <= max_y; y++) {

@@ -20,7 +20,14 @@ SHARED_FILE_PREFIX
 HOST_DEVICE inline double sigmoid(double x){return 2/(1+exp(-x))-1;}
 HOST_DEVICE inline float sigmoid(float x){return 2.0f/(1.0f+expf(-x))-1.0f;}
 
-HOST_DEVICE inline float clamp(float val, float bottom, float top){return min(top, max(val, bottom));}
+HOST_DEVICE inline int clamp(int val, int bottom, int top){
+    int intermediate = (val < bottom) ? bottom : val;
+    return (intermediate < top) ? intermediate : top;
+}
+HOST_DEVICE inline float clamp(float val, float bottom, float top){
+    float intermediate = (val < bottom) ? bottom : val;
+    return (intermediate < top) ? intermediate : top;
+}
 HOST_DEVICE inline double clamp(double val, double bottom, double top){
     double intermediate = (val < bottom) ? bottom : val;
     return (intermediate < top) ? intermediate : top;
@@ -28,6 +35,8 @@ HOST_DEVICE inline double clamp(double val, double bottom, double top){
 
 HOST_DEVICE inline float square(float x){return x * x;}
 HOST_DEVICE inline double square(double x){return x * x;}
+HOST_DEVICE inline int square(int x){return x * x;}
+HOST_DEVICE inline unsigned int square(unsigned int x){return x * x;}
 
 HOST_DEVICE inline float cube(float x){return x * x * x;}
 HOST_DEVICE inline double cube(double x){return x * x * x;}
@@ -65,6 +74,7 @@ HOST_DEVICE inline void print_vec4(vec4 v){printf("vec4(%.3f, %.3f, %.3f, %.3f)\
 
 HOST_DEVICE inline float geom_mean(float x, float y) { return sqrtf(x*y); }
 HOST_DEVICE inline double geom_mean(double x, double y) { return std::sqrt(x*y); }
+HOST_DEVICE inline double geom_mean(int x, int y) { return sqrt(static_cast<double>(x) * y); }
 
 HOST_DEVICE inline int signum(float x) { return (x > 0) - (x < 0); }
 HOST_DEVICE inline int signum(double x) { return (x > 0) - (x < 0); }

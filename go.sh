@@ -405,6 +405,12 @@ echo "go.sh: Building project ${PROJECT_NAME} with output folder name ${OUTPUT_F
 RESULT=$?
 
 if [ $is_windows_msys -eq 1 ]; then
+    # Windows uses real io_out/io_in directories because MSVC tools do not
+    # reliably follow Git Bash symlinks. Preserve the render artifacts in the
+    # same timestamped output directory used by the Unix path before cleanup.
+    if [ -d "build/io_out" ]; then
+        cp -rf "build/io_out/." "$OUTPUT_DIR/"
+    fi
     MSYS2_ARG_CONV_EXCL='*' cmd.exe //C "if exist build\\io_in rmdir /S /Q build\\io_in" >/dev/null 2>&1
     MSYS2_ARG_CONV_EXCL='*' cmd.exe //C "if exist build\\io_out rmdir /S /Q build\\io_out" >/dev/null 2>&1
 else
@@ -414,7 +420,7 @@ fi
 mv "$TEMPFILE" "$OUTPUT_DIR"
 
 # Play video if compilation succeeded, and not in smoketest-only mode
-if [ $RESULT -ne 1 ] && [ $SKIP_RENDER -eq 0 ]; then
+if [ $RESULT -eq 0 ] && [ $SKIP_RENDER -eq 0 ]; then
     ./play.sh ${PROJECT_NAME}
 fi
 

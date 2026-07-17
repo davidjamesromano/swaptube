@@ -7,6 +7,7 @@
 #include <sstream>
 #include <cassert>
 #include <chrono>
+#include <vector>
 #include "Writer.h"
 #include <cstdlib>
 
@@ -26,6 +27,11 @@
 
 using namespace std;
 
+static bool terminal_preview_enabled() {
+    const char* quiet = std::getenv("SWAPTUBE_QUIET");
+    return quiet == nullptr || quiet[0] == '\0' || string(quiet) == "0";
+}
+
 extern "C" void preprocess_argb_to_p010(
     const uint32_t* d_argb,
     uint16_t* d_y_plane,
@@ -40,6 +46,18 @@ extern "C" void preprocess_argb_to_p010(
     unsigned long long uv_offset,
     uint32_t bg
 );
+
+extern "C" void preprocess_argb_to_nv12(
+    const uint32_t* d_argb,
+    uint8_t* d_y_plane,
+    uint8_t* d_uv_plane,
+    int width,
+    int height,
+    int y_pitch_bytes,
+    int uv_pitch_bytes,
+    uint32_t bg
+);
+
 extern "C" void cuda_copy_pixels_to_host(uint32_t* h_pixels, int size, uint32_t* d_pixels);
 
 bool VideoWriter::encode_and_write_frame(AVFrame* frame){
@@ -70,6 +88,69 @@ bool VideoWriter::encode_and_write_frame(AVFrame* frame){
     return true;
 }
 
+static void cleanup_codec_context(AVCodecContext*& codec_ctx) {
+    if (codec_ctx) {
+        avcodec_free_context(&codec_ctx);
+        codec_ctx = nullptr;
+    }
+}
+
+static AVCodecContext* attempt_codec_init(
+    const AVCodec* codec,
+    AVBufferRef* hw_device_ctx,
+    AVPixelFormat pix_fmt,
+    AVPixelFormat sw_fmt,
+    int video_width_pixels,
+    int video_height_pixels,
+    int video_framerate_fps)
+{
+    AVCodecContext* codec_ctx = avcodec_alloc_context3(codec);
+    if (!codec_ctx) {
+        return nullptr;
+    }
+
+    codec_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+    if (!codec_ctx->hw_device_ctx) {
+        avcodec_free_context(&codec_ctx);
+        return nullptr;
+    }
+
+    codec_ctx->width = video_width_pixels;
+    codec_ctx->height = video_height_pixels;
+    codec_ctx->pix_fmt = pix_fmt;
+    codec_ctx->colorspace = AVCOL_SPC_BT709;
+    codec_ctx->color_primaries = AVCOL_PRI_BT709;
+    codec_ctx->color_trc = AVCOL_TRC_BT709;
+    codec_ctx->time_base = { 1, video_framerate_fps };
+    codec_ctx->framerate = { video_framerate_fps, 1 };
+    codec_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+
+    AVBufferRef* hw_frames_ctx = av_hwframe_ctx_alloc(codec_ctx->hw_device_ctx);
+    if (!hw_frames_ctx) {
+        av_buffer_unref(&codec_ctx->hw_device_ctx);
+        avcodec_free_context(&codec_ctx);
+        return nullptr;
+    }
+
+    AVHWFramesContext* frames_ctx = reinterpret_cast<AVHWFramesContext*>(hw_frames_ctx->data);
+    frames_ctx->format = pix_fmt;
+    frames_ctx->sw_format = sw_fmt;
+    frames_ctx->width = video_width_pixels;
+    frames_ctx->height = video_height_pixels;
+    frames_ctx->initial_pool_size = 4;
+
+    int ret = av_hwframe_ctx_init(hw_frames_ctx);
+    if (ret < 0) {
+        av_buffer_unref(&hw_frames_ctx);
+        av_buffer_unref(&codec_ctx->hw_device_ctx);
+        avcodec_free_context(&codec_ctx);
+        return nullptr;
+    }
+
+    codec_ctx->hw_frames_ctx = hw_frames_ctx;
+    return codec_ctx;
+}
+
 VideoWriter::VideoWriter(AVFormatContext *fc_, const string& video_path, int video_width_pixels, int video_height_pixels, int video_framerate_fps) : fc(fc_) {
     #ifdef USE_AMD
     #ifdef _WIN32
@@ -79,6 +160,12 @@ VideoWriter::VideoWriter(AVFormatContext *fc_, const string& video_path, int vid
     #endif
     #endif
     av_log_set_level(AV_LOG_DEBUG);
+
+    // Validate dimensions are even (required for 4:2:0 subsampling)
+    if ((video_width_pixels & 1) || (video_height_pixels & 1)) {
+        throw runtime_error("VideoWriter: width and height must be even for 4:2:0 encoding. Got " +
+                          to_string(video_width_pixels) + "x" + to_string(video_height_pixels));
+    }
 
     // Setting up the codec.
     const AVCodec* codec = avcodec_find_encoder_by_name(CODEC_NAME);
@@ -101,71 +188,108 @@ VideoWriter::VideoWriter(AVFormatContext *fc_, const string& video_path, int vid
         throw runtime_error("Failed to create new videostream!");
     }
 
-    videoCodecContext = avcodec_alloc_context3(codec);
-    if (!videoCodecContext) {
-        av_buffer_unref(&hw_device_ctx);
-        throw runtime_error("Failed to allocate video codec context.");
-    }
-    videoCodecContext->hw_device_ctx = av_buffer_ref(hw_device_ctx);
-    videoCodecContext->width = video_width_pixels;
-    videoCodecContext->height = video_height_pixels;
-    videoCodecContext->pix_fmt = PIXEL_FORMAT;
-    videoCodecContext->colorspace = AVCOL_SPC_BT709;
-    videoCodecContext->color_primaries = AVCOL_PRI_BT709;
-    videoCodecContext->color_trc = AVCOL_TRC_BT709;
-    videoCodecContext->time_base = { 1, video_framerate_fps };
-    videoCodecContext->framerate = { video_framerate_fps, 1 };
-    videoCodecContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    // Try P010LE first on NVIDIA, then fall back to NV12 if it fails
+    #ifdef USE_NVIDIA
+    vector<pair<AVPixelFormat, HWFrameFormat>> formats_to_try = {
+        {AV_PIX_FMT_P010LE, HWFrameFormat::P010LE},
+        {AV_PIX_FMT_NV12, HWFrameFormat::NV12}
+    };
+    #else
+    // AMD always uses P010LE
+    vector<pair<AVPixelFormat, HWFrameFormat>> formats_to_try = {
+        {AV_PIX_FMT_P010LE, HWFrameFormat::P010LE}
+    };
+    #endif
 
-    videoCodecContext->hw_frames_ctx = av_hwframe_ctx_alloc(videoCodecContext->hw_device_ctx);
-    if (!videoCodecContext->hw_frames_ctx) {
-        av_buffer_unref(&hw_device_ctx);
-        throw runtime_error("Failed to allocate hardware frame context!");
+    string p010_error_msg;
+    bool codec_opened = false;
+
+    for (size_t fmt_idx = 0; fmt_idx < formats_to_try.size(); ++fmt_idx) {
+        AVPixelFormat sw_fmt = formats_to_try[fmt_idx].first;
+        HWFrameFormat format_enum = formats_to_try[fmt_idx].second;
+
+        // Attempt to initialize codec context with this format
+        videoCodecContext = attempt_codec_init(
+            codec,
+            hw_device_ctx,
+            PIXEL_FORMAT,
+            sw_fmt,
+            video_width_pixels,
+            video_height_pixels,
+            video_framerate_fps
+        );
+
+        if (!videoCodecContext) {
+            char errbuf[256];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            string format_name = (sw_fmt == AV_PIX_FMT_P010LE) ? "P010LE" : "NV12";
+            cerr << "Failed to allocate codec context for " << format_name << ": " << errbuf << endl;
+            continue;
+        }
+
+        // Try to open the codec with this format
+        AVDictionary* opt = NULL;
+        av_dict_set(&opt, "qp", "20", 0);
+        av_dict_set(&opt, "global_quality", "20", 0);
+
+        int ret2 = avcodec_open2(videoCodecContext, codec, &opt);
+        av_dict_free(&opt);
+
+        if (ret2 < 0) {
+            char errbuf[256];
+            av_strerror(ret2, errbuf, sizeof(errbuf));
+            string format_name = (sw_fmt == AV_PIX_FMT_P010LE) ? "P010LE" : "NV12";
+            string msg = string("Failed to open hevc_nvenc with ") + format_name + ": " + errbuf;
+            cerr << msg << endl;
+
+            if (fmt_idx == 0 && sw_fmt == AV_PIX_FMT_P010LE) {
+                p010_error_msg = msg;
+            }
+
+            // Clean up failed attempt
+            cleanup_codec_context(videoCodecContext);
+            continue;
+        }
+
+        // Successfully opened codec with this format
+        negotiated_format = format_enum;
+        codec_opened = true;
+
+        if (sw_fmt == AV_PIX_FMT_NV12) {
+            cout << "NVIDIA NVENC fallback: P010LE failed, using NV12 instead" << endl;
+            if (!p010_error_msg.empty()) {
+                cout << "  P010LE error: " << p010_error_msg << endl;
+            }
+        }
+        break;
     }
 
-    AVHWFramesContext* frames_ctx = reinterpret_cast<AVHWFramesContext*>(videoCodecContext->hw_frames_ctx->data);
-    frames_ctx->format = videoCodecContext->pix_fmt;
-    frames_ctx->sw_format = AV_PIX_FMT_P010LE;
-    frames_ctx->width = video_width_pixels;
-    frames_ctx->height = video_height_pixels;
-    frames_ctx->initial_pool_size = 4;
-
-    ret = av_hwframe_ctx_init(videoCodecContext->hw_frames_ctx);
-    if (ret < 0) {
+    if (!codec_opened) {
+        cleanup_codec_context(videoCodecContext);
         av_buffer_unref(&hw_device_ctx);
-        throw runtime_error("Failed to initialize hardware frame context!");
+        throw runtime_error("Failed to open video codec with any supported format!");
     }
-    
-    // Sets quality compatible with both hevc and av1, extra options are ignored
-    AVDictionary* opt = NULL;
-    av_dict_set(&opt, "qp", "20", 0);
-    av_dict_set(&opt, "global_quality", "20", 0);
-
-    int ret2 = avcodec_open2(videoCodecContext, codec, &opt);
-    if (ret2 < 0) {
-        char errbuf[256];
-        av_strerror(ret2, errbuf, sizeof(errbuf));
-        cout << "Failed to open video codec: " << errbuf << endl;
-        av_buffer_unref(&hw_device_ctx);
-        throw runtime_error("Failed avcodec_open2!");
-    }
-    av_dict_free(&opt);
 
     ret = avcodec_parameters_from_context(videoStream->codecpar, videoCodecContext);
     if (ret < 0) {
+        cleanup_codec_context(videoCodecContext);
         av_buffer_unref(&hw_device_ctx);
         throw runtime_error("Failed avcodec_parameters_from_context!");
     }
 
     ret = avio_open(&fc->pb, video_path.c_str(), AVIO_FLAG_WRITE);
     if (ret < 0) {
+        cleanup_codec_context(videoCodecContext);
         av_buffer_unref(&hw_device_ctx);
         throw runtime_error("Failed avio_open!");
     }
 
+    AVDictionary* opt = NULL;
     ret = avformat_write_header(fc, &opt);
+    av_dict_free(&opt);
     if (ret < 0) {
         cout << "Failed to write header: " << ff_errstr(ret) << endl;
+        cleanup_codec_context(videoCodecContext);
         av_buffer_unref(&hw_device_ctx);
         throw runtime_error("Failed to write header!");
     }
@@ -178,7 +302,8 @@ void VideoWriter::add_frame(uint32_t* device_pixels) {
 
     static auto last_print_time = chrono::steady_clock::time_point::min();
     auto now = chrono::steady_clock::now();
-    if(!live || last_print_time == chrono::steady_clock::time_point::min() || chrono::duration_cast<chrono::seconds>(now - last_print_time).count() >= 1) {
+    if(terminal_preview_enabled() &&
+       (!live || last_print_time == chrono::steady_clock::time_point::min() || chrono::duration_cast<chrono::seconds>(now - last_print_time).count() >= 1)) {
         Pixels p(get_video_dimensions_pixels());
         cuda_copy_pixels_to_host(p.pixels.data(), get_video_width_pixels() * get_video_height_pixels(), device_pixels);
         p.print_to_terminal();
@@ -240,20 +365,35 @@ void VideoWriter::add_frame(uint32_t* device_pixels) {
     uv_offset = desc->layers[1].planes[0].offset;
     #endif
 
-    preprocess_argb_to_p010(
-            device_pixels,
-            reinterpret_cast<uint16_t*>(gpu_frame->data[0]), // NULL on AMD, properly filled inside CUDA call
-            reinterpret_cast<uint16_t*>(gpu_frame->data[1]), // NULL on AMD, properly filled inside CUDA call
-            fd, // used by AMD only
-            obj_size, // used by AMD only
-            gpu_frame->width,
-            gpu_frame->height,
-            y_pitch,
-            uv_pitch,
-            y_offset, // used by AMD only
-            uv_offset, // used by AMD only
-            get_video_background_color()
-    );
+    // Dispatch to appropriate preprocessing based on negotiated format
+    if (negotiated_format == HWFrameFormat::NV12) {
+        preprocess_argb_to_nv12(
+                device_pixels,
+                reinterpret_cast<uint8_t*>(gpu_frame->data[0]),
+                reinterpret_cast<uint8_t*>(gpu_frame->data[1]),
+                gpu_frame->width,
+                gpu_frame->height,
+                y_pitch,
+                uv_pitch,
+                get_video_background_color()
+        );
+    } else {
+        // P010LE (default for AMD and newer NVIDIA GPUs)
+        preprocess_argb_to_p010(
+                device_pixels,
+                reinterpret_cast<uint16_t*>(gpu_frame->data[0]),
+                reinterpret_cast<uint16_t*>(gpu_frame->data[1]),
+                fd,
+                obj_size,
+                gpu_frame->width,
+                gpu_frame->height,
+                y_pitch,
+                uv_pitch,
+                y_offset,
+                uv_offset,
+                get_video_background_color()
+        );
+    }
 
     gpu_frame->pts = outframe++;
 

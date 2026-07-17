@@ -20,8 +20,12 @@ if(NOT DEFINED AUDIO_SFX)
     set(AUDIO_SFX 0 CACHE STRING "Enable audio SFX streams")
 endif()
 
-set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_COMMAND} -E time")
-set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_COMMAND} -E time")
+# RULE_LAUNCH_* is injected as a command string rather than an argv list, so
+# CMake's executable path must be quoted explicitly on Windows (Visual Studio's
+# bundled CMake lives below "Program Files (x86)").
+set(SWAPTUBE_TIMED_COMMAND "\"${CMAKE_COMMAND}\" -E time")
+set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${SWAPTUBE_TIMED_COMMAND}")
+set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${SWAPTUBE_TIMED_COMMAND}")
 
 include(CheckLanguage)
 message(STATUS "Checking for CUDA and HIP support...")
@@ -258,6 +262,26 @@ if(WIN32)
         HINTS ${SWAPTUBE_WINDOWS_PREFIXES}
         PATH_SUFFIXES lib)
 
+    # MSVC cannot consume the generic MinGW include directory: adding it to the
+    # target makes headers such as stdlib.h resolve to the MinGW CRT instead of
+    # the MSVC CRT. Keep only libpng's self-contained public/config headers in
+    # an isolated include directory while continuing to use its import library.
+    if(MSVC AND PNG_INCLUDE_DIR MATCHES "[Mm][Ss][Yy][Ss]2|mingw")
+        set(_swaptube_png_include_dir "${CMAKE_BINARY_DIR}/swaptube-msvc-png-include")
+        file(MAKE_DIRECTORY "${_swaptube_png_include_dir}")
+        foreach(_png_header png.h pngconf.h pnglibconf.h)
+            if(NOT EXISTS "${PNG_INCLUDE_DIR}/${_png_header}")
+                message(FATAL_ERROR "Missing required libpng header: ${PNG_INCLUDE_DIR}/${_png_header}")
+            endif()
+            configure_file(
+                "${PNG_INCLUDE_DIR}/${_png_header}"
+                "${_swaptube_png_include_dir}/${_png_header}"
+                COPYONLY
+            )
+        endforeach()
+        set(PNG_INCLUDE_DIR "${_swaptube_png_include_dir}")
+    endif()
+
     find_path(GDK_PIXBUF_INCLUDE_DIRS gdk-pixbuf/gdk-pixbuf.h
         HINTS ${SWAPTUBE_WINDOWS_PREFIXES}
         PATH_SUFFIXES include/gdk-pixbuf-2.0 gdk-pixbuf-2.0 include)
@@ -350,7 +374,7 @@ file(GLOB_RECURSE ACTIVE_PROJECT_SOURCE "src/Projects/.active_project.cpp")
 # =====================
 # Executable
 # =====================
-add_compile_options(-fdiagnostics-color=always)
+add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-fdiagnostics-color=always>)
 
 add_executable(${PROJECT_NAME}
     ${ACTIVE_PROJECT_SOURCE}
@@ -395,8 +419,6 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${GLIB_INCLUDE_DIRS}
     ${PNG_INCLUDE_DIR}
     ${GLM_INCLUDE_DIRS}
-    /usr/include/gdk-pixbuf-2.0
-    /usr/include/cairo
 )
 
 if(WIN32)
@@ -404,6 +426,11 @@ if(WIN32)
         ${GDK_PIXBUF_INCLUDE_DIRS}
         ${GLIBCONFIG_INCLUDE_DIRS}
         ${CAIRO_INCLUDE_DIRS}
+    )
+else()
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        /usr/include/gdk-pixbuf-2.0
+        /usr/include/cairo
     )
 endif()
 

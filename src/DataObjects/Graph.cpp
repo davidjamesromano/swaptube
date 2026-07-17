@@ -19,7 +19,7 @@
 
 extern "C" void compute_repulsion_cuda(vec4* h_positions, vec4* h_velocities, const int* h_adjacency_matrix, int num_nodes, int max_degree, float attract, float repel, const float decay, const float dimension, const int iterations);
 
-vector<int> tones = {0,4,7};
+std::vector<int> tones = {0,4,7};
 int tone_incr = 0;
 void node_pop(double subdiv, bool added_not_deleted) {
     int tone_number = added_not_deleted?tones[tone_incr%tones.size()]:-6;
@@ -57,7 +57,7 @@ void Graph::tick(const StateReturn& state) {
 
     last_node_count = size();
     int amount_to_iterate = state["physics_multiplier"];
-    if(!rendering_on()) amount_to_iterate = min(amount_to_iterate, 1); // No need to spread graphs out in smoketest
+    if(!rendering_on()) amount_to_iterate = std::min(amount_to_iterate, 1); // No need to spread graphs out in smoketest
     iterate_physics(
         amount_to_iterate,
         state["repel"],

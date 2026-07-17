@@ -59,6 +59,20 @@ Some example code and demos can be found in `src/Projects/Demos/`. How to run a 
 
 This indicates a 640x360 landscape resolution at 30FPS. Swaptube defaults to an audio sample rate of 48000 Hz- If you need to change that for whatever reason, they are specified in `go.sh` and `record_audios.py`.
 
+On Windows, use the native PowerShell workflow from a PowerShell terminal. It
+loads the MSVC environment and invokes CMake, Ninja, CUDA, and Swaptube without
+Git Bash:
+
+```powershell
+.\go.ps1 MandelbrotDemo 1920 1080 30 -n -c CUDA
+```
+
+Add `-q` to suppress compiler output and disable the periodic GPU-frame terminal
+preview. Use `-s` for a
+smoketest only, `-n` to skip the smoketest, `-h` for audio hints, and `-x` for
+sound effects. If script execution is disabled for the current process, enable
+local scripts with `Set-ExecutionPolicy -Scope Process Bypass`.
+
 # Testing
 You can validate your local installation with ./test.sh, which will compile and smoketest every "Demo" project (in `src/Projects/Demos/`) without rendering.
 
@@ -80,7 +94,11 @@ You can validate your local installation with ./test.sh, which will compile and 
 
 - **go.sh**: The program entry point! It compiles, smoketests, and runs your project file at a specified resolution and framerate.
 
+- **go.ps1**: Native Windows entry point using PowerShell and the MSVC toolchain.
+
 - **play.sh**: Plays back the most recently rendered video with the provided project name.
+
+- **play.ps1**: Native Windows playback helper.
 
 - **test.sh**: Compiles and smoketests all demo projects.
 

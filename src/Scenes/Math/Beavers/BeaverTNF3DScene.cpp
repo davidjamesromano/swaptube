@@ -1,6 +1,8 @@
 #include "BeaverTNF3DScene.h"
 #include "../../../Host_Device_Shared/TuringMachine.h"
 #include <vector>
+#include <array>
+#include <algorithm>
 
 extern "C" void beaver_TNF_3D_cuda(unsigned int* pixels, int w, int h, vec2 center, quat camera, float fov, vec3 lower, vec3 upper, std::vector<int> action, TuringMachine tm, float brightness_offset, float color_source_depth, /*float ancestor_offset,*/ vec3 highlight, float highlight_intensity, int max_steps);
 
@@ -33,8 +35,8 @@ BeaverTNF3DScene::BeaverTNF3DScene(const vec2& dimension) {
 }
 
 int halt_trans(TuringMachine tm, int max_steps) {
-    int half_tape_length = 20;
-    int tape[2 * half_tape_length + 1] = {0};
+    constexpr int half_tape_length = 20;
+    std::array<int, 2 * half_tape_length + 1> tape{};
     int head_position = half_tape_length;
     int current_state = 0;
     int steps = 0;
@@ -45,7 +47,7 @@ int halt_trans(TuringMachine tm, int max_steps) {
         // 1  3  7  12
         // 4  6  8  14
         // 9  11 13 15
-        int action_layer = max(current_state, tape[head_position]) - 1;
+        int action_layer = std::max(current_state, tape[head_position]) - 1;
         int action_side = (int)(current_state < tape[head_position]);
         action_index = action_layer * action_layer + 2 * (current_state + tape[head_position]) + action_side - 1;
         if (action_index >= CODON_MEM_LIMIT) {

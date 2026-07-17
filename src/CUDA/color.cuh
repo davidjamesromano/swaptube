@@ -30,5 +30,5 @@ __device__ __forceinline__ int complex_to_srgb(const thrust::complex<float>& c, 
     if(mag < 1e-7) return Cuda::argb(255, 255, 255, 255); // white to dodge division by zero 
     thrust::complex<float> norm = (c * ab_dilation / mag + thrust::complex<float>(1,1)) * .5;
     float am = 2*atan(mag/dot_radius)/M_PI;
-    return Cuda::OKLABtoRGB(255, 1-.8*am, Cuda::lerp(-.233888, .276216, norm.real()), Cuda::lerp(-.311528, .198570, norm.imag()));
+    return Cuda::OKLABtoRGB(255, 1-.8f*am, Cuda::lerp(-.233888f, .276216f, norm.real()), Cuda::lerp(-.311528f, .198570f, norm.imag()));
 }

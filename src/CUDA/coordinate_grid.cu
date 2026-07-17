@@ -41,7 +41,7 @@ __global__ void render_coordinate_grid_kernel(
     Cuda::vec2 screen_center = (lx_ty + rx_by) * 0.5f;
     Cuda::vec2 to_center = (point_vec - screen_center) / ((rx_by - lx_ty) * 0.5f);
     float roundrect = to_center.x * to_center.x * to_center.x * to_center.x + to_center.y * to_center.y * to_center.y * to_center.y;
-    float opacity = Cuda::lerp(1, .2, roundrect);
+    float opacity = Cuda::lerp(1.0f, 0.2f, roundrect);
     overlay_pixel(pixel, color, opacity, pixels, wh);
 }
 

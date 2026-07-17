@@ -5,10 +5,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <utility>
+#include <string>
+#include <stdexcept>
+#include <iostream>
 #include "../Host_Device_Shared/ThreeDimensionStructs.h"
 #include "color.cuh" // Contains overlay_pixel and set_pixel
 #include "common_graphics.cuh" // Contains fill_circle
 #include <png.h>
+
+using std::cout;
+using std::endl;
+using std::runtime_error;
+using std::string;
 
 extern "C" uint32_t* cuda_copy_map(const string& filename_with_or_without_suffix, Cuda::ivec2& out_wh) {
     // Check if the filename already ends with ".png"

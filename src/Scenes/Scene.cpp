@@ -226,19 +226,10 @@ void Scene::render_one_frame(int microblock_frame_number, int scene_duration_fra
     set_global_state("microblock_fraction", static_cast<double>(microblock_frame_number) / scene_duration_frames);
     set_global_state("voice", sample_to_float(sample));
 
-    Pixels* p = nullptr;
-    query(p);
-
-    bool fifth_frame = int(get_global_state("frame_number")) % 5 == 0;
-    bool should_print_preview = (!rendering_on() || fifth_frame);
-#ifdef _WIN32
-    // Windows console / PTY handling is unstable with ANSI half-block preview output.
-    should_print_preview = false;
-#endif
-    if (should_print_preview) p->print_to_terminal();
+    uint32_t* device_pixels = query();
 
     if (rendering_on()) { // Do not encode during smoketest
-        get_writer().video->add_frame(*p);
+        get_writer().video->add_frame(device_pixels);
     }
 
     remaining_frames_in_macroblock--;
@@ -270,4 +261,3 @@ void Scene::change_data() {
         obj->mark_updated();
     }
 }
-

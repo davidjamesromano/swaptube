@@ -52,7 +52,7 @@ void WhitePaperScene::draw() {
 
         if(i != 0) scaled.darken(darken_factor);
 
-        double this_c = clamp(completion * (num_pages - 1) - i / 2., 0, 1);
+        double this_c = clamp(completion * (num_pages - 1) - i / 2., 0.0, 1.0);
         float pages_centered = i - (num_pages - 1) / 2.0f;
 
         double page_focus_multiplier = cos(page_focus * 3.1415 / 2);

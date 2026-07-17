@@ -1,11 +1,18 @@
 #include <cuda_runtime.h>
 #include <stdint.h>
 #include "color.cuh"
+#include <stdexcept>
 
 __device__ __forceinline__ uint16_t clamp10(float v)
 {
     v = fminf(fmaxf(v, 0.0f), 1023.0f);
     return (uint16_t)v;
+}
+
+__device__ __forceinline__ uint8_t clamp8(float v)
+{
+    v = fminf(fmaxf(v, 0.0f), 255.0f);
+    return (uint8_t)v;
 }
 
 // BT.709 conversion (good default for NVENC pipelines)
@@ -34,7 +41,7 @@ __global__ void argb_to_p010(
 {
     int uv_x = (blockIdx.x * blockDim.x + threadIdx.x);
     int uv_y = (blockIdx.y * blockDim.y + threadIdx.y);
-    
+
     int x = uv_x * 2;
     int y = uv_y * 2;
 
@@ -91,6 +98,76 @@ __global__ void argb_to_p010(
     uv_plane[idx + 1] = v10;
 }
 
+__global__ void argb_to_nv12(
+    const uint32_t* __restrict__ argb,
+    uint8_t* __restrict__ y_plane,
+    uint8_t* __restrict__ uv_plane,
+    int width,
+    int height,
+    int y_pitch,
+    int uv_pitch,
+    uint32_t bg)
+{
+    int uv_x = (blockIdx.x * blockDim.x + threadIdx.x);
+    int uv_y = (blockIdx.y * blockDim.y + threadIdx.y);
+
+    int x = uv_x * 2;
+    int y = uv_y * 2;
+
+    if (x >= width || y >= height) return;
+
+    float u_sum = 0.0f;
+    float v_sum = 0.0f;
+
+    #pragma unroll
+    for (int dy = 0; dy < 2; dy++)
+    {
+        #pragma unroll
+        for (int dx = 0; dx < 2; dx++)
+        {
+            int ix = x + dx;
+            int iy = y + dy;
+
+            if (ix >= width || iy >= height) continue;
+
+            uint32_t pixel = argb[iy * width + ix];
+            pixel = Cuda::color_combine(bg, pixel);
+
+            uint8_t r = Cuda::getr(pixel);
+            uint8_t g = Cuda::getg(pixel);
+            uint8_t b = Cuda::getb(pixel);
+
+            float yf, uf, vf;
+            rgb_to_yuv(r, g, b, yf, uf, vf);
+
+            // BT.709 limited range luma: [16, 235] for 8-bit
+            float y8f = 16.0f + (yf / 255.0f * 219.0f);
+            uint8_t y8 = clamp8(y8f);
+
+            y_plane[iy * y_pitch + ix] = y8;
+
+            u_sum += uf;
+            v_sum += vf;
+        }
+    }
+
+    u_sum *= 0.25f;
+    v_sum *= 0.25f;
+
+    // BT.709 limited range chroma: [16, 240] for 8-bit
+    // rgb_to_yuv produces chroma in [-127.5,127.5], so we need to map to [16,240]
+    float u8f = 128.0f + (u_sum * (224.0f / 255.0f));
+    float v8f = 128.0f + (v_sum * (224.0f / 255.0f));
+
+    uint8_t u8 = clamp8(u8f);
+    uint8_t v8 = clamp8(v8f);
+
+    int idx = uv_y * uv_pitch + uv_x * 2;
+
+    uv_plane[idx + 0] = u8;
+    uv_plane[idx + 1] = v8;
+}
+
 // Reference VA-API codec YUV planes as device pointers, like CUDA does automatically
 __host__ void createVaapiYuvPlanes(
     uint16_t** d_y_plane,
@@ -108,7 +185,7 @@ __host__ void createVaapiYuvPlanes(
     mem_handle_desc.size = mem_size;
 
     if(cudaImportExternalMemory(&ext_mem, &mem_handle_desc) != cudaSuccess) {
-        throw runtime_error("Failed to import DMA-BUF into HIP");
+        throw std::runtime_error("Failed to import DMA-BUF into HIP");
     }
 
     cudaExternalMemoryBufferDesc buf_desc_y = {};
@@ -161,6 +238,31 @@ extern "C" void preprocess_argb_to_p010(
     dim3 block(16, 16);
     dim3 grid((width / 2 + 15) / 16, (height / 2 + 15) / 16);
     argb_to_p010<<<grid, block>>>(
+        d_argb,
+        d_y_plane, d_uv_plane,
+        width, height,
+        y_pitch,
+        uv_pitch,
+        bg);
+    cudaDeviceSynchronize();
+}
+
+extern "C" void preprocess_argb_to_nv12(
+    const uint32_t* d_argb,
+    uint8_t* d_y_plane,
+    uint8_t* d_uv_plane,
+    int width,
+    int height,
+    int y_pitch_bytes,
+    int uv_pitch_bytes,
+    uint32_t bg)
+{
+    int y_pitch = y_pitch_bytes;
+    int uv_pitch = uv_pitch_bytes;
+
+    dim3 block(16, 16);
+    dim3 grid((width / 2 + 15) / 16, (height / 2 + 15) / 16);
+    argb_to_nv12<<<grid, block>>>(
         d_argb, 
         d_y_plane, d_uv_plane, 
         width, height, 

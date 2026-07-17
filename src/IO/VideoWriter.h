@@ -13,6 +13,11 @@ extern "C"
     #include <libavutil/hwcontext_drm.h>
 }
 
+enum class HWFrameFormat {
+    P010LE,
+    NV12
+};
+
 class VideoWriter {
 private:
     // note that the FormatContext has shared ownership with audioWriter and MovieWriter
@@ -24,6 +29,7 @@ private:
     AVPacket pkt = {0};
     unsigned outframe = 0;
     SwsContext* sws_ctx = nullptr;
+    HWFrameFormat negotiated_format = HWFrameFormat::P010LE;
 
     bool encode_and_write_frame(AVFrame* frame);
 

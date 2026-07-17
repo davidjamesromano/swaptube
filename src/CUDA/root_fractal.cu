@@ -109,7 +109,7 @@ __global__ void finalize_color_kernel(unsigned int* d_pixels, float* d_alpha, fl
     g_mod *= 256.0f-brightness;
     b_mod *= 256.0f-brightness;
 
-    unsigned int a = Cuda::clamp(d_alpha[idx] * 2.5, 0.0f, 255.9f);
+    unsigned int a = Cuda::clamp(d_alpha[idx] * 2.5f, 0.0f, 255.9f);
     unsigned int r = Cuda::clamp(r_mod + brightness, 0.0f, 255.9f);
     unsigned int g = Cuda::clamp(g_mod + brightness, 0.0f, 255.9f);
     unsigned int b = Cuda::clamp(b_mod + brightness, 0.0f, 255.9f);

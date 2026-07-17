@@ -1,5 +1,6 @@
 #!/bin/bash
 
+clear
 check_command_available() {
     command -v "$1" > /dev/null 2>&1
     if [ $? -ne 0 ]; then
@@ -97,6 +98,8 @@ run_windows_dev_pipeline() {
     local video_height="$9"
     local framerate="${10}"
     local samplerate="${11}"
+    local audio_hints="${12}"
+    local audio_sfx="${13}"
 
     local runner_bat=".go_windows_pipeline.bat"
     {
@@ -109,16 +112,16 @@ run_windows_dev_pipeline() {
         fi
         echo "cd /d \"${build_dir_win}\""
         echo "if errorlevel 1 exit /b 1"
-        echo "cmake -G Ninja .. -DCMAKE_BUILD_TYPE=Release -DPROJECT_NAME_MACRO=${PROJECT_NAME} -DAUDIO_HINTS=${AUDIO_HINTS} -DAUDIO_SFX=${AUDIO_SFX} ${cmake_args}"
+        echo "cmake -G Ninja .. -DCMAKE_BUILD_TYPE=Release ${cmake_args}"
         echo "if errorlevel 1 exit /b 1"
         echo "ninja -j${build_jobs}"
         echo "if errorlevel 1 exit /b 1"
         if [ "${skip_smoketest}" -eq 0 ]; then
-            echo "swaptube.exe 160 90 ${framerate} ${samplerate} smoketest"
+            echo "swaptube.exe 160 90 ${framerate} ${samplerate} smoketest ${audio_hints} ${audio_sfx}"
             echo "if errorlevel 1 exit /b 2"
         fi
         if [ "${skip_render}" -eq 0 ]; then
-            echo "swaptube.exe ${video_width} ${video_height} ${framerate} ${samplerate} render"
+            echo "swaptube.exe ${video_width} ${video_height} ${framerate} ${samplerate} render ${audio_hints} ${audio_sfx}"
             echo "if errorlevel 1 exit /b 2"
         fi
         echo "exit /b 0"
@@ -174,10 +177,10 @@ if [ -z "$MICROTEX_BINARY" ]; then
     echo "MicroTeX installation verified at ${MICROTEX_BINARY}."
 fi
 
-# Check if the number of arguments is less or more than expected
-if [ $# -lt 4 ] || [ $# -gt 5 ]; then
+# Check if the number of arguments is less than expected
+if [ $# -lt 4 ]; then
     echo "go.sh: Suppose that in the Projects/ directory you have made a project called myproject.cpp."
-    echo "go.sh: Usage: $0 <ProjectName> <VideoWidth> <VideoHeight> <Framerate> [-s|-h|-x|-hx]"
+    echo "go.sh: Usage: $0 <ProjectName> <VideoWidth> <VideoHeight> <Framerate> [optional extra flags]"
     echo "go.sh: Example: $0 myproject 640 360 30 -hx"
     exit 1
 fi
@@ -186,6 +189,7 @@ PROJECT_NAME=$1
 VIDEO_WIDTH=$2
 VIDEO_HEIGHT=$3
 FRAMERATE=$4
+shift; shift; shift; shift;
 # Check that the video dimensions are valid integers
 if ! [[ "$VIDEO_WIDTH" =~ ^[0-9]+$ ]] || ! [[ "$VIDEO_HEIGHT" =~ ^[0-9]+$ ]] || ! [[ "$FRAMERATE" =~ ^[0-9]+$ ]]; then
     echo "go.sh: Error - Video width, height, and framerate must be valid integers."
@@ -198,30 +202,50 @@ SKIP_SMOKETEST=0
 AUDIO_HINTS=0
 AUDIO_SFX=0
 INVALID_FLAG=0
-# If the 5th argument is provided, check if it is valid
-if [ $# -eq 5 ]; then
-    if [ "$5" == "-s" ]; then
-        SKIP_RENDER=1
-    elif [ "$5" == "-n" ]; then
-        SKIP_SMOKETEST=1
-    elif [ "$5" == "-h" ]; then
-        AUDIO_HINTS=1
-    elif [ "$5" == "-x" ]; then
-        AUDIO_SFX=1
-    elif [ "$5" == "-hx" ] || [ "$5" == "-xh" ]; then
-        AUDIO_HINTS=1
-        AUDIO_SFX=1
-    else
-        INVALID_FLAG=1
-    fi
-fi
+COMPUTE_LANG=""
+# Parse flags
+while getopts "snhxc:" flag; do
+    case "$flag" in
+        s) 
+            SKIP_RENDER=1
+            ;;
+        n) 
+            SKIP_SMOKETEST=1
+            ;;
+        h) 
+            AUDIO_HINTS=1
+            ;;
+        x) 
+            AUDIO_SFX=1
+            ;;
+        c)  
+            case "$OPTARG" in
+                CUDA)
+                    COMPUTE_LANG="CUDA"
+                    ;;
+                HIP)
+                    COMPUTE_LANG="HIP"
+                    ;;
+                *)
+                    echo "Invalid compute language specified: use CUDA or HIP"
+                    exit 1
+                    ;;
+            esac
+            ;;
+        *)
+            INVALID_FLAG=1
+            ;;
+    esac
+done
+
 # If the final flag is illegal, print an error message and exit
 if [ $INVALID_FLAG -eq 1 ]; then
-    echo "go.sh: Error - The 4th argument has 4 options:"
+    echo "go.sh: Error - Invalid flag:"
     echo "-s means to only run the smoketest."
+    echo "-n means to only run the render."
     echo "-h means to include audio hints."
     echo "-x means to include sound effects."
-    echo "-hx or -xh means to include both audio hints and sound effects."
+    echo "-c means to specify compute language (takes arguments \"CUDA\" or \"HIP\")"
     exit 1
 fi
 
@@ -288,6 +312,9 @@ echo "go.sh: Building project ${PROJECT_NAME} with output folder name ${OUTPUT_F
         BUILD_DIR_WIN="$(cygpath -w "$PWD")"
         WINDOWS_RUNTIME_DIRS=""
         WINDOWS_CMAKE_ARGS="-DCMAKE_CXX_COMPILER=cl.exe"
+        if [ -n "${COMPUTE_LANG}" ]; then
+            WINDOWS_CMAKE_ARGS="${WINDOWS_CMAKE_ARGS} -DCOMPUTE_LANG=${COMPUTE_LANG}"
+        fi
         MSYS2_ROOT_HINT="$(find_windows_msys2_root || true)"
         if [ -n "$MSYS2_ROOT_HINT" ]; then
             WINDOWS_CMAKE_ARGS="${WINDOWS_CMAKE_ARGS} -DMSYS2_ROOT=\"${MSYS2_ROOT_HINT}\""
@@ -301,11 +328,8 @@ echo "go.sh: Building project ${PROJECT_NAME} with output folder name ${OUTPUT_F
             echo "go.sh: Using FFMPEG_ROOT=${FFMPEG_ROOT_HINT}"
         fi
         echo "go.sh: Bootstrapping MSVC toolchain via $VCVARS64_BAT"
-    else
-        # Pass the variables to CMake as options
-        cmake -G Ninja .. -DCMAKE_BUILD_TYPE=Release -DPROJECT_NAME_MACRO="${PROJECT_NAME}" -DAUDIO_HINTS="${AUDIO_HINTS}" -DAUDIO_SFX="${AUDIO_SFX}"
-        # build the project
     fi
+
     if [ $is_windows_msys -eq 1 ]; then
         # Avoid Windows symlink/junction edge cases under Git Bash.
         rm -rf io_out io_in
@@ -323,7 +347,9 @@ echo "go.sh: Building project ${PROJECT_NAME} with output folder name ${OUTPUT_F
             "$VIDEO_WIDTH" \
             "$VIDEO_HEIGHT" \
             "$FRAMERATE" \
-            "$SAMPLERATE"
+            "$SAMPLERATE" \
+            "$AUDIO_HINTS" \
+            "$AUDIO_SFX"
         RESULT=$?
         if [ $RESULT -eq 1 ]; then
             echo "go.sh: Build failed. Please check the build errors."
@@ -334,10 +360,10 @@ echo "go.sh: Building project ${PROJECT_NAME} with output folder name ${OUTPUT_F
             exit 2
         fi
     else
+        # Unix compile and run pipeline (using upstream's architecture)
+        cmake -G Ninja .. -DCOMPUTE_LANG="${COMPUTE_LANG}"
         echo "go.sh: Compiling..."
         ninja -j"${BUILD_JOBS}"
-
-        # Check if the build was successful
         if [ $? -ne 0 ]; then
             echo "go.sh: Build failed. Please check the build errors."
             exit 1
@@ -352,15 +378,10 @@ echo "go.sh: Building project ${PROJECT_NAME} with output folder name ${OUTPUT_F
         rm -rf io_in
         ln -s "../${INPUT_DIR}" io_in
 
-        # We redirect stderr to null since FFMPEG's encoder libraries tend to dump all sorts of junk there.
-        # Swaptube errors are printed to stdout.
-
         # Smoketest
         if [ $SKIP_SMOKETEST -eq 0 ]; then
-            "$SWAPTUBE_BIN" 160 90 $FRAMERATE $SAMPLERATE smoketest
-            SWAPTUBE_STATUS=$?
-            echo "go.sh: Smoketest exit code ${SWAPTUBE_STATUS}"
-            if [ $SWAPTUBE_STATUS -ne 0 ]; then
+            ./swaptube 320 180 $FRAMERATE $SAMPLERATE smoketest $AUDIO_HINTS $AUDIO_SFX 2>/dev/null
+            if [ $? -ne 0 ]; then
                 echo "go.sh: Execution failed in smoketest."
                 exit 2
             fi
@@ -371,18 +392,12 @@ echo "go.sh: Building project ${PROJECT_NAME} with output folder name ${OUTPUT_F
             # Clear all files from the smoketest
             rm io_out/* -rf
             mkdir -p io_out/frames
-            "$SWAPTUBE_BIN" $VIDEO_WIDTH $VIDEO_HEIGHT $FRAMERATE $SAMPLERATE render
-            SWAPTUBE_STATUS=$?
-            echo "go.sh: Render exit code ${SWAPTUBE_STATUS}"
-            if [ $SWAPTUBE_STATUS -ne 0 ]; then
+            ./swaptube $VIDEO_WIDTH $VIDEO_HEIGHT $FRAMERATE $SAMPLERATE render $AUDIO_HINTS $AUDIO_SFX 2>/dev/null
+            if [ $? -ne 0 ]; then
                 echo "go.sh: Execution failed in render."
                 exit 2
             fi
         fi
-    fi
-
-    if [ $is_windows_msys -eq 1 ] && [ $SKIP_RENDER -eq 0 ]; then
-        cp -rf io_out/. "../${OUTPUT_DIR}/"
     fi
 
     exit 0

@@ -6,7 +6,8 @@
 #include "../Core/State/StateManager.h"
 #include "../Core/Pixels.h"
 #include "../Core/Macroblock.h"
-#include "../IO/VisualMedia.h"
+#include "../DataObjects/DataObject.h"
+#include "../DataObjects/DevicePointer.h"
 #include <string>
 #include <iostream>
 #include <sstream>
@@ -27,12 +28,10 @@ void stage_macroblock(const Macroblock& macroblock, int expected_microblocks_in_
 class Scene {
 public:
     Scene(const vec2& dimensions = vec2(1, 1));
+    ~Scene();
 
     virtual const StateQuery populate_state_query() const = 0;
-    virtual bool check_if_data_changed() const = 0;
     virtual void draw() = 0;
-    virtual void change_data() = 0;
-    virtual void mark_data_unchanged() = 0;
 
     virtual void on_end_transition_extra_behavior(const TransitionType tt){};
     void on_end_transition(const TransitionType tt);
@@ -43,32 +42,38 @@ public:
 
     bool check_if_state_changed() const;
 
-    void query(Pixels*& p);
+    uint32_t* query();
+
+    double get_geom_mean_size();
+    int get_width();
+    int get_height();
+    ivec2 get_width_height();
+    int get_pixels_size();
 
     void render_microblock();
 
     void update_state();
 
-    int get_width() const;
-
-    int get_height() const;
-
-    void export_frame(const string& filename, int scaledown = 1) const;
+    void export_frame(const string& filename, int scaledown = 1);
 
     StateManager manager;
 
     void set_global_identifier(const string& id);
 
+    virtual bool check_if_data_changed() const;
+    virtual void mark_data_unchanged();
+    virtual void change_data();
+
 protected:
-    Pixels pix;
+    DevicePointer* gpu_pix;
     StateReturn state;
     bool has_ever_rendered = false;
 
-    vec2 get_width_height() const;
-
-    double get_geom_mean_size() const;
+    void add_data_object(DataObject* data_object);
 
 private:
+    vector<DataObject*> data_objects;
+
     string global_identifier = ""; // This is prefixed before the published global state elements
                                    // to uniquely identify this scene if necessary.
                                    // Empty by default, meaning no state is published.

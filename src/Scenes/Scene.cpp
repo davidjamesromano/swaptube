@@ -1,7 +1,11 @@
 #include "Scene.h"
 #include "../Core/Smoketest.h"
+#include "../IO/PNG.h"
 #include "../IO/Writer.h"
 #include "../Host_Device_Shared/vec.h"
+#include "../Host_Device_Shared/helpers.h"
+
+extern "C" void cuda_zeroize_pixels(uint32_t* d_pixels, const ivec2& wh);
 
 int remaining_microblocks_in_macroblock = 0;
 int remaining_frames_in_macroblock = 0;
@@ -22,6 +26,8 @@ void stage_macroblock(const Macroblock& macroblock, int expected_microblocks_in_
     cout << "Set remaining microblocks in macroblock to " << to_string(remaining_microblocks_in_macroblock) << endl;
     macroblock.write_shtooka();
 
+    get_writer().audio->encode_buffers();
+
     total_frames_in_macroblock = macroblock.write_and_get_duration_frames();
     if (!rendering_on()) total_frames_in_macroblock = min(10, total_microblocks_in_macroblock); // Don't do too many simmed microblocks in smoketest
     cout << "Set total frames in macroblock to " << to_string(total_frames_in_macroblock) << ". We are " << (rendering_on() ? "rendering" : "smoketesting") << "." << endl;
@@ -31,7 +37,7 @@ void stage_macroblock(const Macroblock& macroblock, int expected_microblocks_in_
 
     double macroblock_length_seconds = static_cast<double>(total_frames_in_macroblock) / get_video_framerate_fps();
 
-    if (AUDIO_HINTS && rendering_on()) { // Add hints for audio synchronization
+    if (rendering_on() && get_writer().audio->audio_hints) { // Add hints for audio synchronization
         double time = get_global_state("t");
         double microblock_length_seconds = macroblock_length_seconds / expected_microblocks_in_macroblock;
         int macroblock_length_samples = round(macroblock_length_seconds * get_audio_samplerate_hz());
@@ -52,8 +58,6 @@ void stage_macroblock(const Macroblock& macroblock, int expected_microblocks_in_
             );
         }
     } // Audio hints
-
-    get_writer().audio->encode_buffers();
 }
 
 Scene::Scene(const vec2& dimensions)
@@ -62,6 +66,15 @@ Scene::Scene(const vec2& dimensions)
         {"w", to_string(dimensions.x)},
         {"h", to_string(dimensions.y)}
     });
+    gpu_pix = new DevicePointer(get_pixels_size());
+    add_data_object(gpu_pix);
+}
+
+Scene::~Scene() {
+    // Clean up data objects
+    for(DataObject* obj : data_objects) {
+        delete obj;
+    }
 }
 
 void Scene::on_end_transition(const TransitionType tt) {
@@ -91,24 +104,25 @@ bool Scene::check_if_state_changed() const {
     return state != last_state;
 }
 
-void Scene::query(Pixels*& p) {
+uint32_t* Scene::query() {
     cout << "(" << flush;
     if(!has_updated_since_last_query) update();
 
     // The only time we skip render entirely is when the project flags to skip a section.
     if(needs_redraw() && is_for_real()) {
         has_ever_rendered = true;
-        pix = Pixels(get_width(), get_height());
+        cuda_zeroize_pixels(gpu_pix->get_ptr(), get_width_height());
         cout << "|" << flush;
         draw();
     }
     mark_data_unchanged();
     has_updated_since_last_query = false;
-    p=&pix;
     cout << ")" << flush;
+    return gpu_pix->get_ptr();
 }
 
 void Scene::render_microblock(){
+    cout << "{" << flush;
     if (remaining_microblocks_in_macroblock == 0) {
         throw runtime_error("ERROR: Attempted to render video, without having added audio first!\nYou probably forgot to stage_macroblock()!\nOr perhaps you staged too few microblocks- " + to_string(total_microblocks_in_macroblock) + " were staged, but there should have been more.");
     }
@@ -138,7 +152,9 @@ void Scene::render_microblock(){
             export_frame(stream.str(), 1);
         }
     }
-    on_end_transition(done_macroblock ? MACRO : MICRO);
+    on_end_transition(MICRO);
+    if(done_macroblock) on_end_transition(MACRO);
+    cout << "} " << flush;
 }
 
 void Scene::update_state() {
@@ -150,16 +166,38 @@ void Scene::update_state() {
     if(global_identifier.size() > 0) publish_global();
 }
 
-int Scene::get_width() const{
+int Scene::get_width() {
+    manager.evaluate_all();
     // TODO shouldn't this really be the container/parent size, not the video?
+    // I have never dealt with doubly nested subscenes so I think this has never been an issue...
     return get_video_width_pixels() * manager.respond_to_query({"w"})["w"];
 }
 
-int Scene::get_height() const{
+int Scene::get_height() {
+    manager.evaluate_all();
     return get_video_height_pixels() * manager.respond_to_query({"h"})["h"];
 }
 
-void Scene::export_frame(const string& filename, int scaledown) const {
+ivec2 Scene::get_width_height() {
+    manager.evaluate_all();
+    auto response = manager.respond_to_query({"w", "h"});
+    return ivec2(get_video_width_pixels() * response["w"], get_video_height_pixels() * response["h"]);
+}
+
+int Scene::get_pixels_size() {
+    manager.evaluate_all();
+    auto response = manager.respond_to_query({"w", "h"});
+    int width = get_video_width_pixels() * response["w"];
+    int height = get_video_height_pixels() * response["h"];
+    cout << "Calculated pixel size: " << width << "x" << height << " = " << width * height << endl;
+    return width * height;
+}
+
+double Scene::get_geom_mean_size() { return geom_mean(get_width(),get_height()); }
+
+void Scene::export_frame(const string& filename, int scaledown) {
+    Pixels pix(get_width_height());
+    gpu_pix->copy_to_host(pix.pixels.data(), get_width_height());
     pix_to_png(pix.naive_scale_down(scaledown), "frames/frame_"+filename);
 }
 
@@ -172,12 +210,6 @@ void Scene::set_global_identifier(const string& id){
     // Update_state does this for us.
     update_state();
 }
-
-vec2 Scene::get_width_height() const{
-    return vec2(get_width(), get_height());
-}
-
-double Scene::get_geom_mean_size() const{ return geom_mean(get_width(),get_height()); }
 
 void Scene::publish_global() {
     const unordered_map<string, double>& s = stage_publish_to_global();
@@ -214,3 +246,28 @@ void Scene::render_one_frame(int microblock_frame_number, int scene_duration_fra
     set_global_state("t", get_global_state("frame_number") / get_video_framerate_fps());
     cout << "]" << flush;
 }
+
+void Scene::add_data_object(DataObject* obj) {
+    data_objects.push_back(obj);
+}
+
+bool Scene::check_if_data_changed() const {
+    for(const DataObject* obj : data_objects) {
+        if(obj->has_been_updated_since_last_scene_query()) {
+            return true;
+        }
+    }
+    return false;
+}
+void Scene::mark_data_unchanged() {
+    for(DataObject* obj : data_objects) {
+        obj->mark_unchanged();
+    }
+}
+void Scene::change_data() {
+    for(DataObject* obj : data_objects) {
+        obj->tick(state);
+        obj->mark_updated();
+    }
+}
+

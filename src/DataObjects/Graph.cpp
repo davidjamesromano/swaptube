@@ -8,16 +8,25 @@
 #include <limits.h>
 #include <queue>
 #include <cstdlib>
-#include <nlohmann/json.hpp>
 #include <sstream>
 #include <cmath>
 #include <algorithm>
 #include <numeric>
 #include "../Host_Device_Shared/vec.h"
+#include "../Host_Device_Shared/helpers.h"
+#include "../Core/Smoketest.h"
+#include "../IO/SFX.h"
 
-using json = nlohmann::json;
+extern "C" void compute_repulsion_cuda(vec4* h_positions, vec4* h_velocities, const int* h_adjacency_matrix, int num_nodes, int max_degree, float attract, float repel, const float decay, const float dimension, const int iterations);
 
-extern "C" void compute_repulsion_cuda(vec4* h_positions, vec4* h_velocities, const int* h_adjacency_matrix, const int* h_mirrors, const int* h_mirror2s, int num_nodes, int max_degree, float attract, float repel, float mirror_force, const float decay, const float dimension, const int iterations);
+vector<int> tones = {0,4,7};
+int tone_incr = 0;
+void node_pop(double subdiv, bool added_not_deleted) {
+    int tone_number = added_not_deleted?tones[tone_incr%tones.size()]:-6;
+    double tone = pow(2,tone_number/12.);
+    tone_incr++;
+    sfx_boink(get_global_state("t") + subdiv, tone * 440, 1/80., 1);
+}
 
 vec4 random_unit_cube_vector(std::mt19937& rng, std::uniform_real_distribution<float>& dist) {
     return {
@@ -28,110 +37,80 @@ vec4 random_unit_cube_vector(std::mt19937& rng, std::uniform_real_distribution<f
     };
 }
 
-Node::Node(GenericBoard* t, double hash, vec4 position, vec4 velocity) :
-    data(t), hash(hash), velocity(velocity), position(position) {}
+Node::Node(double hash, vec4 position, vec4 velocity) :
+    hash(hash), velocity(velocity), position(position) {}
 
-float Node::weight() const { return sigmoid(age*.2f + 0.01f); }
-double Node::radius() const { return size * (((3*age - 1) * exp(-.5*age)) + 1); }
-double Node::splash_opacity() const { return 1-square(age/12.); }
-double Node::splash_radius() const { return size * age * .4; }
-
-Graph::Graph() : root_node_hash(0), dist(0.0f, 1.0f), rng(0) {}
-
-Graph::~Graph() {
-    clear();
-}
+Graph::Graph() : dist(0.0f, 1.0f), rng(0) {}
 
 int Graph::size() const {
     return nodes.size();
 }
 
-void Graph::clear_queue() {
-    traverse_deque.clear();
-}
+void Graph::tick(const StateReturn& state) {
+    // SFX
+    if(last_node_count > -1){
+        int diff = size() - last_node_count;
+        for(int i = 0; i < abs(diff); i++) {
+            node_pop(static_cast<double>(i)/abs(diff), diff>0);
+        }
+    }
 
-void Graph::clear() {
-    traverse_deque.clear();
-    while (nodes.size()>0) {
-        auto i = nodes.begin();
-        delete i->second.data;
-        nodes.erase(i->first);
+    last_node_count = size();
+    int amount_to_iterate = state["physics_multiplier"];
+    if(!rendering_on()) amount_to_iterate = min(amount_to_iterate, 1); // No need to spread graphs out in smoketest
+    iterate_physics(
+        amount_to_iterate,
+        state["repel"],
+        state["attract"],
+        state["decay"],
+        state["dimensions"]
+    );
+    if(has_been_updated_since_last_scene_query()) {
+        //graph_to_3d();
+        //clear_surfaces();
+        //update_surfaces();
     }
 }
 
-void Graph::add_to_stack(GenericBoard* t){
-    double hash = t->get_hash();
-    add_node_without_edges(t);
-    traverse_deque.push_front(hash);
-}
-
-double Graph::add_node(GenericBoard* t){
-    double x = add_node_without_edges(t);
-    add_missing_edges();
-    return x;
-}
-double Graph::add_node_without_edges(GenericBoard* t){
-    double hash = t->get_hash();
+double Graph::add_node(double hash){
     if (node_exists(hash)) {
-        delete t;
         return hash;
     }
-    Node new_node(t, hash, random_unit_cube_vector(rng, dist), random_unit_cube_vector(rng, dist));
-    if (size() == 0) {
-        root_node_hash = hash;
-    }
+    Node new_node(hash, random_unit_cube_vector(rng, dist), random_unit_cube_vector(rng, dist));
     nodes.emplace(hash, new_node);
     return hash;
 }
 
-int Graph::expand(int n) {
-    if(n == 0) return 0;
-    int added = 0;
-    while (!traverse_deque.empty()) {
-        double id = traverse_deque.front();
-        traverse_deque.pop_front();
-
-        std::unordered_set<GenericBoard*> child_nodes = nodes.at(id).data->get_children();
-        bool done = false;
-        for (const auto& child : child_nodes) {
-            double child_hash = child->get_hash();
-            if (done || node_exists(child_hash)) delete child;
-            else {
-                add_node_without_edges(child);
-                if(n>0) traverse_deque.push_front(id); // No need to save progress if expanding whole graph
-                traverse_deque.push_back(child_hash); // push_back: bfs // push_front: dfs
-                added++;
-                std::cout << "." << std::flush;
-                if(added >= n && n > 0) done = true;
-            }
-        }
-        if(done) {
-            add_missing_edges();
-            mark_updated();
-            return added;
-        }
+void Graph::add_node_with_neighbors(double hash, std::vector<double> neighbor_hashes) {
+    if (neighbor_hashes.empty()) return;
+    vec4 avg_position(0.0f);
+    vec4 avg_velocity(0.0f);
+    for (double neighbor_hash : neighbor_hashes) {
+        if (!node_exists(neighbor_hash)) continue;
+        const Node& neighbor = nodes.at(neighbor_hash);
+        avg_position += neighbor.position + 0.01f * random_unit_cube_vector(rng, dist);
+        avg_velocity += neighbor.velocity;
+        add_edge(hash, neighbor_hash);
     }
-    add_missing_edges();
-    if(added > 0) mark_updated();
-    return added;
+    int count = neighbor_hashes.size();
+    avg_position /= count;
+    avg_velocity /= count;
+    nodes.at(hash).position = avg_position;
+    nodes.at(hash).velocity = avg_velocity;
 }
 
-void Graph::add_node_with_position(GenericBoard* t, double x, double y, double z) {
-    double hash = add_node(t);
-    move_node(hash, x, y, z);
-}
-
-void Graph::move_node(double hash, float x, float y, float z, float w) {
+void Graph::move_node(double hash, vec4 pos) {
     auto it = nodes.find(hash);
     if (it == nodes.end()) return;
     Node& node = it->second;
-    node.position = {x, y, z, w};
+    node.position = pos;
     mark_updated();
 }
 
-void Graph::add_directed_edge(double from, double to, double opacity) {
+void Graph::add_edge(double from, double to, double opacity) {
     if (!node_exists(from) || !node_exists(to)) return;
-    nodes.at(from).neighbors.insert(Edge(from, to, opacity));
+    nodes.at(from).neighbors.insert(Edge(from, to));
+    nodes.at(to  ).neighbors.insert(Edge(to, from));
     mark_updated();
 }
 
@@ -139,9 +118,11 @@ void Graph::remove_edge(double from, double to) {
     if (!node_exists(from) || !node_exists(to)) return;
     
     Node& from_node = nodes.at(from);
-    Edge edge_to_remove(from, to);
+    Node& to_node = nodes.at(to);
     
-    from_node.neighbors.erase(edge_to_remove);
+    from_node.neighbors.erase(Edge(from, to));
+    to_node.neighbors.erase(Edge(to, from));
+
     mark_updated();
 }
 
@@ -170,24 +151,6 @@ bool Graph::does_edge_exist(double from, double to){
     return false;
 }
 
-void Graph::add_missing_edges() {
-    for (auto& pair : nodes) {
-        Node& parent = pair.second;
-        if(parent.expected_children_hashes.size() == 0)
-            parent.expected_children_hashes = parent.data->get_children_hashes();
-
-        for (double child_hash : parent.expected_children_hashes) {
-            if(!node_exists(child_hash)) continue;
-            Node& child = nodes.find(child_hash)->second;
-            if(child.age == 0 && parent.age != 0 && !does_edge_exist(parent.hash, child_hash)){
-                child.position = parent.position + random_unit_cube_vector(rng, dist);
-                child.velocity = parent.velocity;
-            }
-            add_directed_edge(parent.hash, child_hash);
-        }
-    }
-}
-
 bool Graph::node_exists(double id) const {
     return nodes.find(id) != nodes.end();
 }
@@ -195,11 +158,9 @@ bool Graph::node_exists(double id) const {
 void Graph::remove_node(double id) {
     if (!node_exists(id)) return;
     Node& node = nodes.at(id);
-    for (const auto& neighbor_edge : node.neighbors) {
-        double neighbor_id = neighbor_edge.to;
+    for (const auto& neighbor_id : get_neighbors(id)) {
         nodes.at(neighbor_id).neighbors.erase(Edge(neighbor_id, id));
     }
-    delete node.data;
     nodes.erase(id);
     mark_updated();
 }
@@ -260,72 +221,6 @@ std::pair<std::list<double>, std::list<Edge*>> Graph::shortest_path(double start
     return {path, edges};
 }
 
-void Graph::collapse_two_nodes(double hash_keep, double hash_remove) {
-    if (!node_exists(hash_keep) || !node_exists(hash_remove)) return;
-    if (hash_keep == hash_remove) return;
-
-    Node& node_keep = nodes.at(hash_keep);
-    Node& node_remove = nodes.at(hash_remove);
-
-    for (const auto& edge : node_remove.neighbors) {
-        if (edge.to != hash_keep) {
-            add_directed_edge(hash_keep, edge.to, edge.opacity);
-            add_directed_edge(edge.to, hash_keep, edge.opacity);
-        }
-    }
-
-    remove_node(hash_remove);
-    mark_updated();
-}
-
-void Graph::delete_isolated() {
-    std::unordered_set<double> non_isolated;
-
-    for (const auto& node_pair : nodes) {
-        const Node& node = node_pair.second;
-        for (const auto& edge : node.neighbors) {
-            non_isolated.insert(edge.to);
-            non_isolated.insert(edge.from);
-        }
-    }
-
-    for (auto it = nodes.begin(); it != nodes.end(); ) {
-        if (non_isolated.find(it->first) == non_isolated.end() && it->first != root_node_hash) {
-            delete it->second.data;
-            it = nodes.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    mark_updated();
-}
-
-void Graph::delete_orphans() {
-    bool orphan_found;
-    do {
-        orphan_found = false;
-        std::unordered_set<double> non_orphans;
-
-        for (const auto& node_pair : nodes) {
-            const Node& node = node_pair.second;
-            for (const auto& edge : node.neighbors) {
-                non_orphans.insert(edge.to);
-            }
-        }
-
-        for (auto it = nodes.begin(); it != nodes.end(); ) {
-            if (non_orphans.find(it->first) == non_orphans.end() && it->first != root_node_hash) {
-                delete it->second.data;
-                it = nodes.erase(it);
-                orphan_found = true;
-            } else {
-                ++it;
-            }
-        }
-    } while (orphan_found);
-    mark_updated();
-}
-
 std::vector<int> Graph::make_adjacency_matrix(const std::vector<Node*>& node_vector, int &max_degree) {
     int n = node_vector.size();
     max_degree = 0;
@@ -355,141 +250,35 @@ std::vector<int> Graph::make_adjacency_matrix(const std::vector<Node*>& node_vec
     return adjacency_matrix;
 }
 
-void Graph::iterate_physics(const int iterations, const float repel, const float attract, const float decay, const float centering_strength, const double dimension, const float mirror_force, const bool flip_by_symmetry) {
+void Graph::iterate_physics(const int iterations, const float repel, const float attract, const float decay, const double dimension) {
+    if(iterations <= 0) return;
+
     std::vector<Node*> node_vector;
+    std::unordered_map<double, int> node_indices;
 
     for (auto& node_pair : nodes) node_vector.push_back(&node_pair.second);
-    for (int i = 0; i < node_vector.size(); ++i) { node_vector[i]->age++; }
 
     int s = node_vector.size();
     std::vector<vec4> positions(s);
     std::vector<vec4> velocities(s);
 
-    vec4 com = center_of_mass() * centering_strength;
     for (int i = 0; i < s; ++i) {
-         positions[i] = node_vector[i]->position - com;
+        positions[i] = node_vector[i]->position;
         velocities[i] = node_vector[i]->velocity;
-        node_vector[i]->index = i;
+        node_indices[node_vector[i]->hash] = i;
     }
     int max_degree = 0;
     std::vector<int> adjacency_matrix = make_adjacency_matrix(node_vector, max_degree);
-    std::vector<int> mirrors(s, -1);
-    std::vector<int> mirror2s(s, -1);
 
+    compute_repulsion_cuda(positions.data(), velocities.data(), adjacency_matrix.data(), s, max_degree, attract, repel, decay, dimension, iterations);
+
+    // TODO we should just permanently store the graph on the GPU, unless it is modified often?
     for (int i = 0; i < s; ++i) {
-        const auto& node = node_vector[i];
-
-        {
-            double rev_hash = node->data->get_reverse_hash();
-            auto it_mirror = nodes.find(rev_hash);
-            if (it_mirror != nodes.end()) {
-                mirrors[i] = it_mirror->second.index;
-            }
-        }
-        {
-            double rev_hash_2 = node->data->get_reverse_hash_2();
-            auto it_mirror_2 = nodes.find(rev_hash_2);
-            if (it_mirror_2 != nodes.end()) {
-                mirror2s[i] = it_mirror_2->second.index;
-            }
-        }
-    }
-
-    compute_repulsion_cuda(positions.data(), velocities.data(), adjacency_matrix.data(), mirrors.data(), mirror2s.data(), s, max_degree, attract, repel, mirror_force, decay, dimension, iterations);
-
-    for (int i = 0; i < s; ++i) {
-        int flip = 1;
-        if(flip_by_symmetry) flip = signum(node_vector[i]->data->which_side() * node_vector[i]->position.x);
         node_vector[i]->position = positions[i];
-        node_vector[i]->position.x *= flip;
         node_vector[i]->velocity = velocities[i];
     }
 
     mark_updated();
-}
-
-vec4 Graph::center_of_mass() const {
-    vec4 sum_position(0.0f);
-    float mass = 0.1;
-
-    for (const auto& node_pair : nodes) {
-        const Node& node = node_pair.second;
-        float sig = node.weight();
-        vec4 addy(sig*node.position);
-        sum_position += addy;
-        mass += sig;
-    }
-
-    vec4 ret = sum_position / mass;
-    return ret;
-}
-
-float Graph::af_dist() const {
-    float sum_distance_sq = 0.0;
-    float ct = 0.1;
-
-    vec4 com = center_of_mass();
-
-    for (const auto& node_pair : nodes) {
-        const Node& node = node_pair.second;
-        float sig = node.weight();
-        vec4 pos_com = node.position - com;
-        sum_distance_sq += sig * dot(pos_com, pos_com);
-        ct += sig;
-    }
-
-    float ans = 6 + 4.8*pow(sum_distance_sq / ct, .5);
-    return ans;
-}
-
-void Graph::render_json(std::string json_out_filename) {
-    std::ofstream myfile;
-    myfile.open(json_out_filename);
-
-    json json_data;
-
-    json nodes_to_use;
-    for (auto it = nodes.begin(); it != nodes.end(); ++it) {
-        const Node& node = it->second;
-        json node_info;
-        node_info["x"] = node.position.x;
-        node_info["y"] = node.position.y;
-        node_info["z"] = node.position.z;
-        node_info["rep"] = node.data->representation;
-        node_info["data"] = node.data->get_data();
-
-        json neighbors;
-        for (const auto& neighbor : node.neighbors) {
-            std::string neighbor_representation = nodes.at(neighbor.to).data->representation;
-            if(neighbor_representation.size() < node.data->representation.size()) continue;
-            std::ostringstream oss;
-            oss << std::setprecision(17) << neighbor.to;
-            neighbors.push_back(oss.str());
-        }
-        node_info["neighbors"] = neighbors;
-
-        std::ostringstream oss;
-        oss << std::setprecision(17) << it->first;
-        nodes_to_use[oss.str()] = node_info;
-    }
-
-    json_data["nodes_to_use"] = nodes_to_use;
-    json_data["nodes_to_use"].dump(4, ' ', false, json::error_handler_t::ignore);
-
-    std::ostringstream oss;
-    oss << std::setprecision(17) << root_node_hash;
-    json_data["root_node_hash"] = oss.str();
-    json_data["board_w"  ] = 7;
-    json_data["board_h"  ] = 6;
-    json_data["game_name"] = "c4";
-
-    myfile.seekp(0, ios::beg);
-    myfile << "var dataset = ";
-    myfile << json_data.dump();
-
-    myfile.close();
-
-    std::cout << "Rendered json!" << std::endl;
 }
 
 std::unordered_set<double> Graph::get_neighborhood(double hash, int dist) {
@@ -518,19 +307,15 @@ std::unordered_set<double> Graph::get_neighborhood(double hash, int dist) {
     return neighborhood;
 }
 
-void Graph::make_bidirectional() {
-    std::vector<std::pair<double, double>> edges_to_add;
-    for (const auto& pair : nodes) {
-        double from = pair.first;
-        const EdgeSet& neighbors = pair.second.neighbors;
-        for (const Edge& edge : neighbors) {
-            double to = edge.to;
-            if (!does_edge_exist(to, from)) {
-                edges_to_add.emplace_back(to, from);
-            }
-        }
+std::unordered_set<double> Graph::get_neighbors(double hash) {
+    std::unordered_set<double> neighbors;
+    if (!node_exists(hash)) {
+        throw std::runtime_error("Node with hash " + std::to_string(hash) + " does not exist.");
+        return neighbors;
     }
-    for (const auto& edge : edges_to_add) {
-        add_directed_edge(edge.first, edge.second);
+    const Node& node = nodes.at(hash);
+    for (const Edge& edge : node.neighbors) {
+        neighbors.insert(edge.to);
     }
+    return neighbors;
 }

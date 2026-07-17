@@ -3,44 +3,40 @@
 #include "../Scene.h"
 #include "../Common/ThreeDimensionScene.h"
 #include "../../DataObjects/Graph.h"
+#include "../../DataObjects/GraphDrawingConfig.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
 #include <string>
 #include <vector>
 
+string to_string_with_precision(const double a_value, const int n);
+
 class GraphScene : public ThreeDimensionScene {
 public:
     double curr_hash;
     double next_hash;
     std::vector<unsigned int> color_scheme;
-    GraphScene(std::shared_ptr<Graph> g, bool surfaces_on, const vec2& dimensions = vec2(1, 1));
+    GraphScene(const vec2& dimensions = vec2(1, 1));
 
-    void graph_to_3d();
-
-    virtual int get_edge_color(const Node& node, const Node& neighbor);
+    void draw() override;
 
     const StateQuery populate_state_query() const override;
 
-    void mark_data_unchanged() override;
-    void change_data() override;
-    bool check_if_data_changed() const override;
-
     void on_end_transition_extra_behavior(const TransitionType tt) override;
 
-    void update_surfaces();
+    Graph* graph;
+    GraphDrawingConfig* config;
 
-    virtual Surface make_surface(Node node) const;
+    void transition_node_position(const TransitionType tt, const double hash, const vec4& shift);
 
-    // Override the default surface render routine to make all graph surfaces point at the camera
-    void render_surface(const Surface& surface) override;
-
-    bool surfaces_override_unsafe; // For really big graphs, you can permanently turn off node stuff. This happens in the constructor, but careful when handling manually.
-    std::shared_ptr<Graph> graph;
-
-protected:
-    std::unordered_map<std::string, std::pair<Surface, std::shared_ptr<Scene>>> graph_surface_map;
+    uint32_t label_color;
+    vec2 label_size = vec2(0.4,0.08);
+    vec2 label_offset = vec2(0, 0);
+    double edge_label_offset = 0.02;
 
 private:
     int last_node_count;
+    std::unordered_map<double, std::pair<vec4, vec4>> nodes_in_micro_transition;
+    std::unordered_map<double, std::pair<vec4, vec4>> nodes_in_macro_transition;
 };

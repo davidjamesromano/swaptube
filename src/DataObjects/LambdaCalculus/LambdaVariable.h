@@ -7,6 +7,7 @@
 #include <cctype>
 
 #include "LambdaExpression.h"
+#include "../../IO/SVG.h"
 
 class LambdaAbstraction;
 
@@ -36,4 +37,5 @@ public:
     std::shared_ptr<LambdaExpression> reduce() override;
     std::shared_ptr<LambdaExpression> specific_reduction(int x) override;
     std::shared_ptr<const LambdaAbstraction> get_bound_abstraction() const;
+    void tick(const StateReturn& state);
 };

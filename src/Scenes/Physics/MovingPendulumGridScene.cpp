@@ -11,6 +11,7 @@ MovingPendulumGridScene::MovingPendulumGridScene(const vec2& dimensions) : Coord
             {"theta2", "0"},
             {"p1", "0"},
             {"p2", "0"},
+            {"rk4_step_size", "0.01"},
             {"momentum_value_gradient", "1"}});
 }
 
@@ -19,10 +20,6 @@ const StateQuery MovingPendulumGridScene::populate_state_query() const {
     state_query_insert_multiple(s, {"physics_multiplier", "rk4_step_size", "mode", "center_x", "center_y", "contrast", "theta_or_momentum", "theta1", "theta2", "p1", "p2", "momentum_value_gradient"});
     return s;
 }
-
-void MovingPendulumGridScene::mark_data_unchanged() { }
-void MovingPendulumGridScene::change_data() {}
-bool MovingPendulumGridScene::check_if_data_changed() const { return false; }
 
 void MovingPendulumGridScene::draw_grid() {
     int w = get_width();
@@ -48,7 +45,8 @@ void MovingPendulumGridScene::draw_grid() {
         state["bottom_y"] * (  tom) + state["p2"    ],
         state["top_y"   ] * (  tom) + state["p2"    ]
     );
-    grid.iterate_physics(state["physics_multiplier"], state["rk4_step_size"]);
+    grid.tick(state);
+    Pixels pix(get_width_height());
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
             int i = x+y*w;

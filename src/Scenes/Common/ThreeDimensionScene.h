@@ -37,7 +37,6 @@ struct Path {
 
 class ThreeDimensionScene : public SuperScene {
 public:
-    bool use_state_for_center;
     ThreeDimensionScene(const vec2& dimensions = vec2(1, 1));
 
     vec2 coordinate_to_pixel(vec3 coordinate, bool& behind_camera);
@@ -81,6 +80,8 @@ public:
     void add_surface_fade_in(const TransitionType tt, const Surface& s, shared_ptr<Scene> sc, double opa=1);
 
     void remove_surface(const string& name);
+    void enable_globe();
+    void enable_globe(const string& which);
 
     void clear_lines();
     void clear_points();
@@ -96,5 +97,6 @@ protected:
     vector<Point> points;
     vector<Line> lines;
     vector<Surface> surfaces;
-    std::map<string, Path> paths;
+    map<string, Path> paths;
+    DevicePointer* distance_buffer;
 };

@@ -1,7 +1,8 @@
 #pragma once
 #include "../../DataObjects/LambdaCalculus/LambdaExpression.h"
+#include "../../DataObjects/LambdaCalculus/LambdaUtils.h"
 #include "../Scene.h"
-#include "../../IO/VisualMedia.h"
+#include "../../IO/SVG.h"
 #include <memory>
 #include <string>
 #include <utility>
@@ -23,9 +24,6 @@ public:
     std::shared_ptr<LambdaExpression> get_clone();
 
     void on_end_transition_extra_behavior(const TransitionType tt) override;
-    void mark_data_unchanged() override;
-    void change_data() override;
-    bool check_if_data_changed() const override;
 
     float get_scale(std::shared_ptr<const LambdaExpression> expr);
 

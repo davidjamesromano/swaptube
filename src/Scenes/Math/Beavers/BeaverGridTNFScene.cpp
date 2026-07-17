@@ -10,7 +10,7 @@ BeaverGridTNFScene::BeaverGridTNFScene(const vec2& dimension)
 
 void BeaverGridTNFScene::draw() {
     beaver_grid_TNF_cuda(
-        pix.pixels.data(), pix.w, pix.h,
+        gpu_pix->get_ptr(), get_width(), get_height(),
         vec2(state[ "left_x"], state[   "top_y"]),
         vec2(state["right_x"], state["bottom_y"]),
         state["max_steps"]
@@ -24,7 +24,3 @@ const StateQuery BeaverGridTNFScene::populate_state_query() const {
     sq.insert("max_steps");
     return sq;
 }
-
-void BeaverGridTNFScene::mark_data_unchanged() { }
-void BeaverGridTNFScene::change_data() { }
-bool BeaverGridTNFScene::check_if_data_changed() const { return false; }

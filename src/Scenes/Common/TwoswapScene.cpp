@@ -10,6 +10,25 @@ extern "C" void cuda_overlay(
     uint32_t* background, const ivec2& b_wh,
     const uint32_t* foreground, const ivec2& f_wh,
     const vec2& center, const float opacity, const float angle);
+extern "C" uint32_t* cuda_alloc_pixels_on_device(int size);
+extern "C" void cuda_copy_pixels_to_device(uint32_t* h_pixels, int size, uint32_t* d_pixels);
+extern "C" void cuda_free_pixels_on_device(uint32_t* d_pixels);
+
+static void overlay_host_pixels(
+    uint32_t* background, const ivec2& background_wh,
+    Pixels& foreground, const vec2& center,
+    const float opacity, const float angle)
+{
+    const int pixel_count = foreground.wh.x * foreground.wh.y;
+    uint32_t* device_foreground = cuda_alloc_pixels_on_device(pixel_count);
+    cuda_copy_pixels_to_device(foreground.pixels.data(), pixel_count, device_foreground);
+    cuda_overlay(
+        background, background_wh,
+        device_foreground, foreground.wh,
+        center, opacity, angle
+    );
+    cuda_free_pixels_on_device(device_foreground);
+}
 
 TwoswapScene::TwoswapScene(const vec2& dimensions) : MandelbrotScene(dimensions) {
     manager.set({
@@ -62,8 +81,8 @@ void TwoswapScene::draw(){
         double yval = (foreground_pix.wh.y-twoswap_pix.wh.y)/2+get_width()/96;
         foreground_pix.overwrite(twoswap_pix, ivec2(get_width()/3+get_width()/23+get_width()/96, yval));
 
-        cuda_overlay(gpu_pix->get_ptr(), wh,
-            foreground_pix.pixels.data(), foreground_pix.wh,
+        overlay_host_pixels(gpu_pix->get_ptr(), wh,
+            foreground_pix,
             (wh-foreground_pix.wh)/2 - wh*.04 + whole_shift,
             twoswapness * .6, -.2
         );
@@ -73,7 +92,7 @@ void TwoswapScene::draw(){
         Pixels foreground_pix(floor(get_width() * vec2(1, .2)));
 
         Pixels image;
-        png_to_pix(image, "../musicnote");
+        png_to_pix(image, "musicnote");
 
         Pixels scaled;
         image.scale_to_bounding_box(wh * vec2(1, .135), scaled);
@@ -85,8 +104,8 @@ void TwoswapScene::draw(){
         double yval = (foreground_pix.wh.y-seef_pix.wh.y)/2;
         foreground_pix.overwrite(seef_pix, ivec2(get_width()*.4 + scaled.wh.x+get_width()/96, yval));
 
-        cuda_overlay(gpu_pix->get_ptr(), wh,
-            foreground_pix.pixels.data(), foreground_pix.wh,
+        overlay_host_pixels(gpu_pix->get_ptr(), wh,
+            foreground_pix,
             (get_width()-foreground_pix.wh)/2 - wh*vec2(.029, .285) + whole_shift,
             seefness * .6, -.2
         );
@@ -99,8 +118,8 @@ void TwoswapScene::draw(){
         Pixels swaptube_pix = Pixels(wh);
         swaptube_pix.overwrite(swaptube_pix_small_box, (size - swaptube_pix_small_box.wh)/2);
 
-        cuda_overlay(gpu_pix->get_ptr(), wh,
-            swaptube_pix.pixels.data(), swaptube_pix.wh,
+        overlay_host_pixels(gpu_pix->get_ptr(), wh,
+            swaptube_pix,
             (wh-swaptube_pix.wh)/2 + get_width_height()*vec2(.08, .28) + whole_shift,
             swaptubeness * .6, -.2
         );

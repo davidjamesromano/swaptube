@@ -63,6 +63,9 @@ On Windows, use the native PowerShell workflow from a PowerShell terminal. It
 loads the MSVC environment and invokes CMake, Ninja, CUDA, and Swaptube without
 Git Bash:
 
+For complete fresh-machine prerequisites and installation instructions, see
+**[Building and running SwapTube on Windows](WINDOWS.md)**.
+
 ```powershell
 .\go.ps1 MandelbrotDemo 1920 1080 30 -n -c CUDA
 ```

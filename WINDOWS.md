@@ -1,0 +1,265 @@
+# Building and running SwapTube on Windows
+
+This fork has a native Windows workflow. Run it from a normal **64-bit
+PowerShell** window; Git Bash, WSL, and a manually opened Visual Studio
+Developer Prompt are not required.
+
+The supported and tested configuration is:
+
+- 64-bit Windows 10 or 11
+- an NVIDIA GPU and the CUDA compute backend
+- Visual Studio 2022 Build Tools (MSVC)
+- CMake and Ninja
+- shared FFmpeg development files
+- GLib, Cairo, librsvg, GdkPixbuf, and libpng from MSYS2
+- MicroTeX, built in a sibling directory next to the SwapTube checkout
+
+SwapTube compiles CUDA code and renders on the GPU. A CPU-only Windows build is
+not currently supported. The PowerShell script accepts `-c HIP`, but the native
+Windows HIP path is not part of the tested setup described here.
+
+## 1. Install Visual Studio 2022 Build Tools
+
+Download either [Visual Studio 2022 Community or Build
+Tools](https://visualstudio.microsoft.com/downloads/). In the Visual Studio
+Installer, select **Desktop development with C++**. Keep these included
+components selected:
+
+- MSVC v143 x64/x86 build tools
+- a Windows 10 or Windows 11 SDK
+- C++ CMake tools for Windows
+
+`go.ps1` locates `vcvars64.bat` and imports the x64 MSVC environment itself.
+
+## 2. Install the NVIDIA driver and CUDA Toolkit
+
+The machine needs a [CUDA-capable NVIDIA
+GPU](https://developer.nvidia.com/cuda-gpus). Install a current NVIDIA driver,
+then download and install the [CUDA Toolkit for
+Windows](https://developer.nvidia.com/cuda-downloads). NVIDIA's full procedure
+is in the [CUDA Installation Guide for Microsoft
+Windows](https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/).
+
+Use a CUDA Toolkit version that supports both your installed Visual Studio
+toolset and your GPU. CUDA 13 no longer targets compute capabilities below 6.0;
+older Maxwell GPUs may therefore require CUDA 12.x.
+
+Open a new PowerShell window and verify the installation:
+
+```powershell
+nvidia-smi
+nvcc --version
+```
+
+## 3. Install Git, CMake, Ninja, and shared FFmpeg
+
+Install Git, CMake 3.24 or newer, Ninja, and a shared FFmpeg build. Both
+[Chocolatey](https://chocolatey.org/install) and [Scoop](https://scoop.sh/)
+work. With Chocolatey, run in an Administrator PowerShell window:
+
+```powershell
+choco install git cmake ninja ffmpeg-shared -y
+```
+
+With Scoop, run in a normal PowerShell window:
+
+```powershell
+scoop install git cmake ninja ffmpeg-shared
+```
+
+Use `ffmpeg-shared`, not the executable-only `ffmpeg` package. SwapTube needs
+the FFmpeg headers, import libraries, and runtime DLLs. `go.ps1` detects the
+standard Chocolatey and Scoop installation locations automatically.
+
+Close and reopen PowerShell, then verify:
+
+```powershell
+git --version
+cmake --version
+ninja --version
+ffmpeg -version
+```
+
+## 4. Install the graphics libraries with MSYS2
+
+Install [MSYS2](https://www.msys2.org/) using its official installer in the
+default location, `C:\msys64`, or install it with Scoop:
+
+```powershell
+scoop install msys2
+```
+
+`go.ps1` recognizes both `C:\msys64` and Scoop's
+`%USERPROFILE%\scoop\apps\msys2\current` layout. Open **MSYS2 MSYS** from the
+Start menu, or launch the Scoop-installed MSYS2 shell, and fully update it:
+
+```bash
+pacman -Syu
+```
+
+If MSYS2 asks you to close the terminal, reopen **MSYS2 MSYS** and run
+`pacman -Syu` again. Then install the 64-bit MinGW libraries and the tools used
+to build MicroTeX:
+
+```bash
+pacman -S --needed \
+  mingw-w64-x86_64-toolchain \
+  mingw-w64-x86_64-cmake \
+  mingw-w64-x86_64-ninja \
+  mingw-w64-x86_64-glib2 \
+  mingw-w64-x86_64-cairo \
+  mingw-w64-x86_64-librsvg \
+  mingw-w64-x86_64-gdk-pixbuf2 \
+  mingw-w64-x86_64-libpng
+```
+
+`go.ps1` detects the selected MSYS2 installation and supplies its `mingw64`
+prefix to CMake. Do not add the general MSYS2 include directory to MSVC
+manually.
+
+## 5. Clone and build MicroTeX
+
+MicroTeX is required even when the selected demo does not visibly use LaTeX,
+because `go.ps1` validates it before configuring SwapTube. "Built beside" means
+that the `swaptube` and `MicroTeX-master` directories must have the same parent
+directory. MicroTeX does **not** go inside the SwapTube directory. SwapTube uses
+the relative path `..\MicroTeX-master` to find it. For example:
+
+```text
+C:\Projects\
+|-- swaptube\
+`-- MicroTeX-master\
+```
+
+Here, `C:\Projects` is an example shared parent directory. The exact parent path
+and the SwapTube directory name may differ, but the MicroTeX directory must be
+named `MicroTeX-master` and remain directly next to the SwapTube directory.
+
+From PowerShell, clone it with the directory name expected by SwapTube:
+
+```powershell
+Set-Location C:\Projects
+git clone https://github.com/NanoMichael/MicroTeX.git MicroTeX-master
+```
+
+Open **MSYS2 MinGW x64** from the Start menu and build MicroTeX. Adjust
+`/c/Projects` if the repositories are elsewhere:
+
+```bash
+cd /c/Projects/MicroTeX-master
+cmake -S . -B build-mingw-headless -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-mingw-headless --parallel
+```
+
+Confirm that this file now exists:
+
+```text
+C:\Projects\MicroTeX-master\build-mingw-headless\LaTeX.exe
+```
+
+SwapTube also recognizes `MicroTeX-master\build\LaTeX.exe`.
+
+## 6. Clone and render SwapTube
+
+In a normal PowerShell window:
+
+```powershell
+Set-Location C:\Projects
+git clone https://github.com/meghanto/swaptube.git swaptube
+Set-Location .\swaptube
+Set-ExecutionPolicy -Scope Process Bypass
+```
+
+First run a small smoketest. It compiles the whole program but renders only one
+frame per microblock:
+
+```powershell
+.\go.ps1 MandelbrotDemo 640 360 30 -s -c CUDA
+```
+
+Then render the demo:
+
+```powershell
+.\go.ps1 MandelbrotDemo 640 360 30 -n -c CUDA -q
+```
+
+The arguments are project name, even video width, even video height, and frame
+rate. `go.ps1` finds the project below `src\Projects`, configures CMake with
+Ninja and MSVC, builds on all CPU cores, runs SwapTube, and opens the completed
+video.
+
+Useful switches:
+
+- `-s`: smoketest only
+- `-n`: skip the smoketest and perform the full render immediately
+- `-q`: suppress compiler output and the periodic terminal frame preview
+- `-h`: enable audio hints
+- `-x`: enable sound effects
+- `-c CUDA`: select the NVIDIA CUDA backend
+
+Do not combine `-s` and `-n`.
+
+Rendered files are written to:
+
+```text
+out\<ProjectName>\<yyyy-MM-dd_HH.mm.ss>\
+```
+
+The separate `record_audios.py` voice-recording helper currently depends on
+Linux ALSA and is not supported on Windows. This does not prevent building,
+smoketesting, rendering, or playing projects whose required audio assets are
+already present.
+
+To replay the newest render later:
+
+```powershell
+.\play.ps1 MandelbrotDemo
+```
+
+`play.ps1` prefers VLC or mpv when installed, otherwise it opens the video with
+the Windows default file association. A specific player may be supplied as the
+second argument:
+
+```powershell
+.\play.ps1 MandelbrotDemo "C:\Program Files\VideoLAN\VLC\vlc.exe"
+```
+
+## Troubleshooting
+
+### A required command was not found
+
+Open a new PowerShell window after installing or upgrading tools. Check
+`cmake --version`, `ninja --version`, `nvcc --version`, and `ffmpeg -version`.
+You do not need to launch PowerShell through Git Bash or a Visual Studio prompt.
+
+### Required Windows dependencies were not found
+
+Confirm that the selected MSYS2 installation contains
+`mingw64\include\glib-2.0\glib.h`, and that the Chocolatey or Scoop
+`ffmpeg-shared` directory contains both `include\libavcodec\avcodec.h` and
+`lib\avcodec.lib`. A static-only or executable-only FFmpeg package is not
+sufficient.
+
+### MicroTeX was not found
+
+The checkout must be named `MicroTeX-master` and must be beside SwapTube, not
+inside it. Rebuild it and confirm that `LaTeX.exe` is in one of the two paths
+listed above.
+
+### CUDA architecture errors
+
+The default Windows target is compute capability 5.0 with CUDA 12 and 6.0 with
+CUDA 13. If the default does not match the installed GPU, create `local.cmake`
+in the SwapTube root with a numeric architecture such as `75` or `86`:
+
+```cmake
+set(SWAPTUBE_CUDA_ARCH 75 CACHE STRING "CUDA compute capability" FORCE)
+```
+
+Then rerun `go.ps1`. Remove `local.cmake` to return to automatic selection.
+
+### Playback hangs or reports a WASAPI endpoint error
+
+This commonly occurs when `ffplay` runs in a remote or noninteractive session.
+Use `play.ps1`, VLC, mpv, or open the generated video directly. Rendering does
+not require an active audio playback endpoint.

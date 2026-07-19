@@ -404,6 +404,7 @@ if(SWAPTUBE_USE_CUDA)
                 -gencode=arch=compute_${SWAPTUBE_CUDA_ARCH},code=compute_${SWAPTUBE_CUDA_ARCH}
                 --expt-relaxed-constexpr
                 -Xcudafe --diag_suppress=20012
+                -Xcompiler=/Zc:preprocessor
             >
         )
     endif()

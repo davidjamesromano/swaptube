@@ -255,6 +255,18 @@ HOST_DEVICE inline quat normalize(const quat& q) { float len = length(q); return
 HOST_DEVICE inline float dot(const vec2& a, const vec2& b) { return a.x * b.x + a.y * b.y; }
 HOST_DEVICE inline float dot(const vec3& a, const vec3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 HOST_DEVICE inline float dot(const vec4& a, const vec4& b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
+
+#ifdef __CUDA_ARCH__
+#define IS_NAN(x) isnan(x)
+#else
+#define IS_NAN(x) std::isnan(x)
+#endif
+
+HOST_DEVICE inline bool hasnan(const vec2& v) { return IS_NAN(v.x) || IS_NAN(v.y); }
+HOST_DEVICE inline bool hasnan(const vec3& v) { return IS_NAN(v.x) || IS_NAN(v.y) || IS_NAN(v.z); }
+HOST_DEVICE inline bool hasnan(const vec4& v) { return IS_NAN(v.x) || IS_NAN(v.y) || IS_NAN(v.z) || IS_NAN(v.w); }
+HOST_DEVICE inline bool hasnan(const quat& q) { return IS_NAN(q.u) || IS_NAN(q.i) || IS_NAN(q.j) || IS_NAN(q.k); }
+
 HOST_DEVICE inline float dot(const ivec2& a, const ivec2& b) { return a.x * b.y + a.y * b.x; }
 HOST_DEVICE inline float dot(const ivec3& a, const ivec3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 HOST_DEVICE inline float dot(const ivec4& a, const ivec4& b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }

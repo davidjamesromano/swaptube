@@ -241,3 +241,22 @@ extern "C" void cuda_overlay (
 extern "C" void cuda_zeroize_pixels(uint32_t* d_pixels, const Cuda::ivec2& wh) {
     cudaMemset(d_pixels, 0, wh.x * wh.y * sizeof(uint32_t));
 }
+
+__global__ void fill_kernel(uint32_t* pixels, const Cuda::ivec2 wh, const uint32_t color) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= wh.x || y >= wh.y) return;
+    pixels[y * wh.x + x] = color;
+}
+
+// Paint every pixel one ARGB color. Scenes are zeroized to fully transparent
+// before draw(), so this is how a scene gives itself an opaque background to draw
+// on top of. cudaMemset cannot do it: it writes one byte value, which only covers
+// colors whose four channels are equal.
+extern "C" void cuda_fill_pixels(uint32_t* d_pixels, const Cuda::ivec2& wh, uint32_t color) {
+    dim3 blockSize(16, 16);
+    dim3 numBlocks((wh.x + blockSize.x - 1) / blockSize.x,
+                   (wh.y + blockSize.y - 1) / blockSize.y);
+    fill_kernel<<<numBlocks, blockSize>>>(d_pixels, wh, color);
+    cudaDeviceSynchronize();
+}

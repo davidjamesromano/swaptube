@@ -20,7 +20,6 @@
 //     v0.x:1.3                drag a corner of the table around
 //     zoom:-0.6               negative zooms out (CoordinateScene's is inverted)
 //     rainbow:1               tint hops by age
-//     orbit_fade:0.9          dim the trail behind the head
 //     pivot_opacity:1         mark the corner each hop turns about
 //     line_thickness:<dot_size> 2 *   ...arithmetic works: + - * / ^ sin cos
 //                                exp sqrt abs log floor ceil pi e phi min max
@@ -34,9 +33,9 @@
 //     singularity_depth:200   ...and this is how many preimages deep. THE knob.
 //                             Cost is linear in it; fractional values are fine.
 //     singularity_glow:0.4    soft halo around each line
-//     singularity_rainbow:1   tint lines by how deep a preimage they are
 //     island_opacity:0.6      fill the gaps the graph leaves, hued by which hop
-//     island_max_period:0     brings the orbit back nearest (0 sizes it to the shot)
+//                             brings the orbit back nearest (search depth is
+//                             sized automatically from the shot)
 //     curvature:-0.1          bend the plane hyperbolic (0 is Euclidean). The
 //     horizon_opacity:1       ideal boundary sits at 1/sqrt(-curvature).
 //

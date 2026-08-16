@@ -118,9 +118,6 @@ void render_video() {
     // -----------------------------------------------------------------------
     // 4. What the web leaves alone, and how it looks up close.
     // -----------------------------------------------------------------------
-    // island_max_period is left at 0, which sizes the search from the shot - a
-    // hand-picked ceiling leaves the far corners unshaded, because a closed
-    // orbit's period grows with how far out it starts.
     stage_macroblock(SilenceBlock(4), 1);
     bs.fade_islands(MICRO, 0.55);
     bs.render_microblock();

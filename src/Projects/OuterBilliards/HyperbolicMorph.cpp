@@ -33,8 +33,8 @@
 static const double FLOW_ITERATIONS = 20000;
 
 // How many hops of the single tracked orbit to draw. Tune this and re-render
-// to taste - orbit_fade and rainbow are both off by default, so every hop
-// stays the same solid orbit_color regardless of how many are drawn.
+// to taste - rainbow is off by default, so every hop stays the same solid
+// orbit_color regardless of how many are drawn.
 static const double ORBIT_ITERATIONS = 200;
 
 // Same disk as FlowGraph.cpp/SingularityGraph.cpp: an ideal boundary of
@@ -58,7 +58,6 @@ void render_video() {
     bs.manager.set("horizon_opacity", "1");
     bs.manager.set("poincare_view", "1");   // bow the geodesics into arcs instead of Klein's straight chords
     bs.frame_view(vec2(0, 0), 3.7f);
-    bs.manager.set("singularity_glow", "1");
 
     bs.set_flow_iterations(FLOW_ITERATIONS);
     bs.manager.set("flow_shade_by_distance", "0");

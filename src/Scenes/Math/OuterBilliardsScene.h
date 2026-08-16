@@ -37,16 +37,13 @@
 // see OuterBilliardsShared.h).
 //
 // Other state variables, all with sensible defaults: shape_opacity,
-// shape_fill_opacity, vertex_dot_size, orbit_opacity, dot_size, line_thickness,
-// orbit_fade (dim the older hops), pivot_opacity (mark the vertex each hop
-// turns about), rainbow/rainbow_period (tint hops by age), ray_opacity,
-// horizon_opacity, singularity_opacity, singularity_width, singularity_glow,
-// singularity_rainbow/singularity_rainbow_period, island_opacity,
-// island_max_period (0 sizes it from the shot), poincare_view (draw the
-// Poincare disk instead of Klein's straight chords), flow_scale,
-// flow_shade_by_distance, flow_auto_depth. Panning and zooming come from
-// CoordinateScene: center_x, center_y, zoom - or use frame_view(), in world
-// units.
+// shape_fill_opacity, orbit_opacity, dot_size, line_thickness, pivot_opacity
+// (mark the vertex each hop turns about), rainbow/rainbow_period (tint hops by
+// age), ray_opacity, horizon_opacity, singularity_opacity, singularity_glow,
+// island_opacity, poincare_view (draw the Poincare disk instead of Klein's
+// straight chords), flow_scale, flow_shade_by_distance, flow_auto_depth.
+// Panning and zooming come from CoordinateScene: center_x, center_y, zoom - or
+// use frame_view(), in world units.
 // ---------------------------------------------------------------------------
 class OuterBilliardsScene : public CoordinateScene {
 public:
@@ -100,10 +97,9 @@ public:
     void grow_singularities(const TransitionType tt, double depth, bool smooth = true);
     void fade_singularities(const TransitionType tt, double opacity, bool smooth = true);
 
-    // The regions the web never reaches, filled by period. "island_max_period"
-    // (0 by default, sizing it from the shot) is a plain state variable, not
-    // wrapped here - cost is linear in it, so raise it by hand only if the
-    // auto-sized search is visibly leaving corners unshaded.
+    // The regions the web never reaches, filled by period. How deep to search
+    // for a closed orbit is sized automatically from the shot - see
+    // auto_island_period().
     void fade_islands(const TransitionType tt, double opacity, bool smooth = true);
 
     // --- where every point goes ------------------------------------------
@@ -205,7 +201,7 @@ private:
     void push_geodesic(const vec2& a, const vec2& b, const OuterBilliards& table,
                        uint32_t color, float opacity, float thickness);
 
-    // How deep to hunt for a closed orbit, when island_max_period is left at 0.
+    // How deep to hunt for a closed orbit, sized automatically from the shot.
     int auto_island_period(const OuterBilliards& table);
 
     // How far the current view reaches from the table's center, in the plane's

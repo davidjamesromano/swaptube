@@ -72,8 +72,7 @@ __global__ void singularity_graph_kernel(
 
     // The brightest layer wins the pixel rather than the sum of them, so a dense
     // corner of the web reads as one crisp line instead of blowing out to white.
-    float    web_intensity = 0.0f;
-    uint32_t web_color     = params.line_color;
+    float web_intensity = 0.0f;
 
     // How near the whole graph passes this pixel, in screen units - which is what
     // says whether the pixel is in one of the gaps the graph leaves.
@@ -110,14 +109,7 @@ __global__ void singularity_graph_kernel(
                         intensity = 1.0f - (1.0f - intensity) * (1.0f - soft);
                     }
                     intensity *= weight;
-                    if (intensity > web_intensity) {
-                        web_intensity = intensity;
-                        web_color = params.rainbow > 0.001f
-                            ? Cuda::colorlerp(params.line_color,
-                                              Cuda::rainbow((float)k / params.rainbow_period),
-                                              params.rainbow)
-                            : params.line_color;
-                    }
+                    if (intensity > web_intensity) web_intensity = intensity;
                 }
             }
         }
@@ -149,7 +141,7 @@ __global__ void singularity_graph_kernel(
         }
     }
     if (web_intensity > 0.0f) {
-        out = Cuda::color_combine(out, web_color, Cuda::clamp(web_intensity * params.web_opacity, 0.0f, 1.0f));
+        out = Cuda::color_combine(out, params.line_color, Cuda::clamp(web_intensity * params.web_opacity, 0.0f, 1.0f));
     }
     pixels[index] = out;
 }

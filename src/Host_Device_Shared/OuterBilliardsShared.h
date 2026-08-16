@@ -385,8 +385,6 @@ struct SingularityGraphParams {
                               // so ramping this grows the web smoothly instead of layer by layer.
     float    line_width;      // pixels
     float    glow;            // 0..1 peak of a soft halo four line-widths wide
-    float    rainbow;         // blend line_color toward a hue that advances with depth
-    float    rainbow_period;  // layers per full trip around the color wheel
     uint32_t line_color;
 
     // --- the islands: the gaps the graph leaves behind --------------------

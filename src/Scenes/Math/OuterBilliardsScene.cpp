@@ -36,6 +36,9 @@ static const float EMPHASIS = 1.7f;
 // SIDES for the same tradeoff made for the boundary circle.
 static const int GEODESIC_SEGMENTS = 32;
 
+// Width of the singularity graph's lines, in pixels, held constant as you zoom.
+static const float SINGULARITY_LINE_WIDTH = 1.2f;
+
 OuterBilliardsScene::OuterBilliardsScene(const vec2& dimensions)
     : CoordinateScene(dimensions) {
     manager.set({
@@ -44,16 +47,14 @@ OuterBilliardsScene::OuterBilliardsScene(const vec2& dimensions)
         {"iterations", "0"},
 
         // The table. shape_opacity is the master for the whole thing; the other
-        // two are relative to it.
+        // one is relative to it.
         {"shape_opacity",      "1"},
         {"shape_fill_opacity", "0.22"},
-        {"vertex_dot_size",    "1"},
 
         // The orbits.
         {"orbit_opacity",  "1"},
         {"dot_size",       "1"},     // scales every dot
         {"line_thickness", "1"},     // scales every line
-        {"orbit_fade",     "0"},     // 1 dims the oldest hop all the way out
         {"pivot_opacity",  "0"},     // mark the vertex each hop turns about
         {"rainbow",        "0"},     // blend hop color toward a hue that advances with age
         {"rainbow_period", "12"},    // hops per full trip around the color wheel
@@ -81,16 +82,12 @@ OuterBilliardsScene::OuterBilliardsScene(const vec2& dimensions)
         // a scene that only wants orbits should not pay for it.
         {"singularity_opacity",       "0"},
         {"singularity_depth",         "0"},    // preimages to draw; real, so it can be ramped
-        {"singularity_width",         "1.2"},  // pixels, held constant as you zoom
         {"singularity_glow",          "0"},    // 0..1 peak of a soft halo around each line
-        {"singularity_rainbow",       "0"},    // tint lines by how deep a preimage they are
-        {"singularity_rainbow_period","24"},   // layers per full trip around the color wheel
 
         // The periodic islands - the gaps the graph leaves. Filled up to the
         // graph itself, and colored by which hop brought the orbit back
         // nearest to where it set off.
         {"island_opacity",      "0"},
-        {"island_max_period",   "0"},    // 0 works it out from the shot; cost is linear in it
     });
 }
 
@@ -514,10 +511,7 @@ void OuterBilliardsScene::draw_singularity_graph(const OuterBilliards& table) {
     const float island_opacity = (float)state["island_opacity"];
     const float depth          = (float)state["singularity_depth"];
 
-    // Zero means "work it out from the shot", which is almost always better than
-    // a number picked by hand - see auto_island_period.
-    const int requested = (int)state["island_max_period"];
-    const int max_period = (requested > 0) ? requested : auto_island_period(table);
+    const int max_period = auto_island_period(table);
 
     const bool wants_web     = web_opacity    > MIN_OPACITY && depth > 0.0f;
     const bool wants_islands = island_opacity > MIN_OPACITY && max_period > 1 && depth > 0.0f;
@@ -548,10 +542,8 @@ void OuterBilliardsScene::draw_singularity_graph(const OuterBilliards& table) {
 
     params.web_opacity    = wants_web ? web_opacity : 0.0f;
     params.depth          = depth;
-    params.line_width     = (float)state["singularity_width"];
+    params.line_width     = SINGULARITY_LINE_WIDTH;
     params.glow           = (float)state["singularity_glow"];
-    params.rainbow        = (float)state["singularity_rainbow"];
-    params.rainbow_period = std::fmax((float)state["singularity_rainbow_period"], 1e-3f);
     params.line_color     = singularity_color;
 
     params.island_opacity = wants_islands ? island_opacity : 0.0f;
@@ -652,7 +644,6 @@ void OuterBilliardsScene::draw_orbit(const OrbitSpec& orbit, const OuterBilliard
     const bool head_in_flight = wants_partial && (int)path.size() == whole + 2;
 
     const uint32_t color = orbit.color ? orbit.color : orbit_color;
-    const float fade           = (float)state["orbit_fade"];
     const float rainbow_mix    = (float)state["rainbow"];
     const float rainbow_period = std::fmax((float)state["rainbow_period"], 1e-3f);
 
@@ -667,12 +658,9 @@ void OuterBilliardsScene::draw_orbit(const OrbitSpec& orbit, const OuterBilliard
         vec2 to = path[k + 1];
         if (head_in_flight && k == hops - 1) to = veclerp(from, to, partial);
 
-        // age runs 0 at the oldest hop to 1 at the newest, so orbit_fade dims the
-        // trail behind the head without ever touching the head itself.
-        const float age = (hops > 1) ? (float)(k + 1) / (float)hops : 1.0f;
         uint32_t hop_color = color;
         if (rainbow_mix > 0.001f) hop_color = colorlerp(color, rainbow((float)k / rainbow_period), rainbow_mix);
-        push_geodesic(from, to, table, hop_color, opacity * (1.0f - fade * (1.0f - age)), thickness);
+        push_geodesic(from, to, table, hop_color, opacity, thickness);
     }
 
     // The vertex each hop turned about, if asked for.
@@ -754,8 +742,7 @@ void OuterBilliardsScene::draw() {
             push_geodesic(table.vertices[i], table.vertices[(i + 1) % n], table,
                          table_color, shape_opacity, thickness * 1.25f);
         }
-        const float vertex_radius = dot_radius * (float)state["vertex_dot_size"];
-        for (int i = 0; i < n; i++) push_dot(pixel_verts[i], vertex_radius, table_color, shape_opacity);
+        for (int i = 0; i < n; i++) push_dot(pixel_verts[i], dot_radius, table_color, shape_opacity);
     }
 
     // Two launches, in order: lines, then every dot on top of them.

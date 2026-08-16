@@ -1,25 +1,14 @@
 // billiards.cu
 // ---------------------------------------------------------------------------
 // A small antialiased 2D vector renderer: filled convex polygons, thick line
-// segments, and round dots. Written for OuterBilliardsScene, which needs to lay
-// down a table outline and then a few thousand orbit hops on top of it, but
-// nothing here knows anything about billiards.
+// segments, and round dots, for OuterBilliardsScene.
 //
-// Parallelism: one thread per PIXEL, walking every primitive - the same trade
-// ball_and_stick.cu makes, and for the same two reasons:
-//
-//   1. Antialiasing and blending come out right. Each thread composites its own
-//      pixel in array order and writes it once, so overlapping segments blend
-//      deterministically instead of racing (the per-primitive kernels in
-//      3d_points_lines.cu stamp with atomicCAS and let the winner be whoever
-//      finishes first).
-//   2. One launch draws the whole batch. An orbit is hundreds or thousands of
-//      segments; a launch apiece would be all overhead.
-//
-// Each primitive is bounding-box rejected before the real distance test, so the
-// per-pixel loop costs a couple of compares for the (many) primitives nowhere
-// near it. Successive launches on the same stream stay ordered, so the caller
-// controls layering by choosing the order it calls these in.
+// One thread per PIXEL, walking every primitive - same trade as
+// ball_and_stick.cu, for the same reasons: each thread composites its own
+// pixel in array order (so overlaps blend deterministically instead of racing,
+// unlike 3d_points_lines.cu's atomicCAS stamping), and one launch draws the
+// whole batch instead of one per segment. Each primitive is bounding-box
+// rejected before the real distance test.
 // ---------------------------------------------------------------------------
 
 #include <cuda_runtime.h>

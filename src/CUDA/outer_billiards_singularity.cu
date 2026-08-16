@@ -3,32 +3,15 @@
 // The singularity graph of an outer billiards table, and the periodic islands
 // it leaves behind. One thread per pixel, one forward orbit per thread.
 //
-// Host_Device_Shared/OuterBilliardsShared.h has the mathematics and, in
-// particular, the identity this whole file rests on:
-//
-//     dist(p, T^-k(R)) = dist(T^k(p), R)
-//
-// The k'th layer of the graph is the set of points that reach a singular ray in
-// k hops. Nothing here ever constructs that set. A thread walks its own pixel
-// forward instead, and at every step asks how far the CURRENT point is from the
-// n rays - which, because each piece of T is a half-turn and rotations keep
-// distances, is how far the ORIGINAL point was from that layer. Taking the best
-// answer over all layers gives a signed-distance field for the whole fractal,
-// evaluated in a loop with no memory traffic.
-//
-// Two things fall out of that for free. Lines come out antialiased, because a
-// distance can be compared against a pixel's width instead of rounded to it. And
-// they stay one pixel wide at any zoom, because that comparison is made in world
-// units against the size a pixel actually covers - a rasterized version would
-// thin out to nothing as you zoomed in on a preimage that fine.
-//
-// The distances are the CURVED ones, so the same argument carries the same
-// picture into the hyperbolic plane: the map is an isometry there too, and the
-// only thing the kernel has to do differently is convert a hyperbolic distance
-// into a screen distance before comparing it to a line width.
-//
-// Both layers - web and islands - come out of the SAME walk, so drawing them
-// together costs barely more than drawing either alone.
+// Rests on the identity in OuterBilliardsShared.h: dist(p, T^-k(R)) =
+// dist(T^k(p), R). The k'th layer of the graph is every point that reaches a
+// singular ray in k hops; rather than construct that set, each thread walks
+// its own pixel forward and asks how far the CURRENT point is from the n rays,
+// which (T being a distance-preserving half-turn on each piece) is how far the
+// ORIGINAL point was from that layer. The best answer over all layers is a
+// signed-distance field for the whole fractal - antialiased for free (compare
+// distance to a pixel's width instead of rounding to it) and one pixel wide at
+// any zoom. Both layers - web and islands - come out of the same walk.
 // ---------------------------------------------------------------------------
 
 #include <cuda_runtime.h>
@@ -118,8 +101,7 @@ __global__ void singularity_graph_kernel(
                 // Layer k fades in over the last unit of depth, so a ramping
                 // `depth` grows the graph continuously instead of snapping a
                 // layer at a time.
-                float weight = Cuda::clamp(params.depth - (float)k, 0.0f, 1.0f);
-                if (params.fade > 0.0f) weight *= 1.0f - params.fade * (float)k / fmaxf(params.depth, 1.0f);
+                const float weight = Cuda::clamp(params.depth - (float)k, 0.0f, 1.0f);
 
                 if (weight > 0.0f) {
                     float intensity = line_coverage(d, half_width, wpp);

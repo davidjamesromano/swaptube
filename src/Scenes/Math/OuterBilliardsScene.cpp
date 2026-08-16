@@ -21,9 +21,6 @@ extern "C" void outer_billiards_singularity_render(uint32_t* d_pixels, const ive
 extern "C" void outer_billiards_flow_render(uint32_t* d_pixels, const ivec2& wh,
                                             const FlowFieldParams& params);
 
-// Paints the whole panel one color, from src/CUDA/pixels_manip.cu.
-extern "C" void cuda_fill_pixels(uint32_t* d_pixels, const ivec2& wh, uint32_t color);
-
 // Below this an opacity is not worth a copy to the GPU, and below this a radius
 // or a thickness is not worth drawing.
 static const float MIN_OPACITY = BILLIARDS_MIN_OPACITY;
@@ -69,8 +66,6 @@ OuterBilliardsScene::OuterBilliardsScene(const vec2& dimensions)
         {"flow_opacity",    "0"},
         {"flow_iterations", "0"},
         {"flow_scale",      "0"},   // 0 sizes the color wheel from the table
-        {"flow_continuous", "1"},   // 1 turns through each hop, 0 holds every whole iterate
-        {"flow_samples",    "1"},   // n x n per pixel; 1 leaves chaos as raw noise
         {"flow_shade_by_distance", "1"},   // 0 drops white-middle/fade-to-black, leaving hue alone
         {"flow_auto_depth", "0"},   // 1 adds hops as the view pans/zooms past what flow_iterations was tuned for
 
@@ -88,16 +83,14 @@ OuterBilliardsScene::OuterBilliardsScene(const vec2& dimensions)
         {"singularity_depth",         "0"},    // preimages to draw; real, so it can be ramped
         {"singularity_width",         "1.2"},  // pixels, held constant as you zoom
         {"singularity_glow",          "0"},    // 0..1 peak of a soft halo around each line
-        {"singularity_fade",          "0"},    // 1 dims the deepest layer all the way out
         {"singularity_rainbow",       "0"},    // tint lines by how deep a preimage they are
         {"singularity_rainbow_period","24"},   // layers per full trip around the color wheel
 
-        // The periodic islands - the regions the graph never reaches.
-        // The gaps the graph leaves. Filled up to the graph itself, and colored
-        // by which hop brought the orbit back nearest to where it set off.
+        // The periodic islands - the gaps the graph leaves. Filled up to the
+        // graph itself, and colored by which hop brought the orbit back
+        // nearest to where it set off.
         {"island_opacity",      "0"},
         {"island_max_period",   "0"},    // 0 works it out from the shot; cost is linear in it
-        {"island_period_scale", "3"},    // OCTAVES of return time per trip around the color wheel
     });
 }
 
@@ -191,8 +184,6 @@ const std::string& OuterBilliardsScene::require_orbit(const std::string& name, c
     return name;
 }
 
-bool OuterBilliardsScene::has_orbit(const std::string& name) const { return find_orbit(name) >= 0; }
-
 void OuterBilliardsScene::add_orbit(const std::string& name, const vec2& start, uint32_t color) {
     if (find_orbit(name) >= 0) {
         throw std::runtime_error("OuterBilliardsScene::add_orbit: there is already an orbit named '" + name + "'.");
@@ -202,8 +193,6 @@ void OuterBilliardsScene::add_orbit(const std::string& name, const vec2& start, 
         {orbit_var(name, "x"),       std::to_string(start.x)},
         {orbit_var(name, "y"),       std::to_string(start.y)},
         {orbit_var(name, "opacity"), "1"},
-        // Follow the scene-wide hop count until someone overrides this one.
-        {orbit_var(name, "iterations"), "<iterations>"},
     });
 }
 
@@ -211,8 +200,7 @@ void OuterBilliardsScene::remove_orbit(const std::string& name) {
     const int index = find_orbit(name);
     if (index < 0) return;
     orbits.erase(orbits.begin() + index);
-    manager.remove({orbit_var(name, "x"), orbit_var(name, "y"),
-                    orbit_var(name, "opacity"), orbit_var(name, "iterations")});
+    manager.remove({orbit_var(name, "x"), orbit_var(name, "y"), orbit_var(name, "opacity")});
 }
 
 void OuterBilliardsScene::move_start(const TransitionType tt, const std::string& name, const vec2& to, bool smooth) {
@@ -232,22 +220,9 @@ void OuterBilliardsScene::move_start(const TransitionType tt, const vec2& to, bo
     move_start(tt, orbits.front().name, to, smooth);
 }
 
-vec2 OuterBilliardsScene::start_of(const std::string& name) const {
-    const int index = find_orbit(name);
-    if (index < 0) {
-        throw std::runtime_error("OuterBilliardsScene::start_of: no orbit named '" + name + "'.");
-    }
-    return orbits[index].start_target;
-}
-
 void OuterBilliardsScene::fade_orbit(const TransitionType tt, const std::string& name, double opacity) {
     require_orbit(name, "fade_orbit");
     manager.transition(tt, orbit_var(name, "opacity"), std::to_string(opacity));
-}
-
-void OuterBilliardsScene::set_orbit_color(const std::string& name, uint32_t color) {
-    require_orbit(name, "set_orbit_color");
-    orbits[find_orbit(name)].color = color;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,16 +235,6 @@ void OuterBilliardsScene::set_iterations(double count) {
 
 void OuterBilliardsScene::iterate_to(const TransitionType tt, double count, bool smooth) {
     manager.transition(tt, "iterations", std::to_string(count), smooth);
-}
-
-void OuterBilliardsScene::iterate_orbit_to(const TransitionType tt, const std::string& name, double count, bool smooth) {
-    require_orbit(name, "iterate_orbit_to");
-    manager.transition(tt, orbit_var(name, "iterations"), std::to_string(count), smooth);
-}
-
-void OuterBilliardsScene::follow_global_iterations(const TransitionType tt, const std::string& name) {
-    require_orbit(name, "follow_global_iterations");
-    manager.transition(tt, orbit_var(name, "iterations"), "<iterations>");
 }
 
 // ---------------------------------------------------------------------------
@@ -301,10 +266,6 @@ void OuterBilliardsScene::fade_islands(const TransitionType tt, double opacity, 
     manager.transition(tt, "island_opacity", std::to_string(opacity), smooth);
 }
 
-void OuterBilliardsScene::set_island_max_period(int max_period) {
-    manager.set("island_max_period", std::to_string(max_period));
-}
-
 // ---------------------------------------------------------------------------
 // Where every point goes
 // ---------------------------------------------------------------------------
@@ -322,10 +283,6 @@ void OuterBilliardsScene::flow_to(const TransitionType tt, double count, bool sm
     // at a steady rate, and an eased ramp would make it look like the dynamics
     // were speeding up and slowing down.
     manager.transition(tt, "flow_iterations", std::to_string(count), smooth);
-}
-
-void OuterBilliardsScene::set_flow_continuous(bool continuous) {
-    manager.set("flow_continuous", continuous ? "1" : "0");
 }
 
 void OuterBilliardsScene::set_flow_auto_depth(bool on) {
@@ -348,10 +305,6 @@ void OuterBilliardsScene::bend_space(const TransitionType tt, double curvature, 
         {"curvature",       std::to_string(curvature)},
         {"horizon_opacity", curvature < 0.0 ? "1" : "0"},
     }, smooth);
-}
-
-double OuterBilliardsScene::horizon_for(double curvature) {
-    return curvature < 0.0 ? 1.0 / std::sqrt(-curvature) : 0.0;
 }
 
 double OuterBilliardsScene::curvature_for_horizon(double horizon) {
@@ -400,19 +353,12 @@ std::vector<vec2> OuterBilliardsScene::current_shape() const {
     return verts;
 }
 
-// How many hops to allow before giving up on an orbit closing.
-//
-// A closed orbit's period grows with how far out it starts. Two hops compose to a
-// translation by twice a side of the table, so getting once around takes roughly
-// pi * distance / side hops, and closing up takes several trips - which means a
-// FIXED ceiling does not cut off some uniform fringe, it cuts off exactly the
-// corners of the shot, the part of the view farthest from the table. That is
-// what used to leave the outer regions unshaded. Scale it with how far the view
-// actually reaches instead, measured in the plane's own metric so that a curved
-// plane - where the far field is much farther away than it looks - gets its share.
-// The constant is empirical, and generous on purpose: the cells farthest out are
-// the ones whose periods are hardest to predict, and an orbit that is one hop
-// short of closing shades as though it never closes at all.
+// How many hops to allow before giving up on an orbit closing. A closed
+// orbit's period grows with how far out it starts (getting once around takes
+// roughly pi * distance / side hops), so a FIXED ceiling cuts off exactly the
+// corners of the shot rather than some uniform fringe. Scaled instead by how
+// far the view reaches, in the plane's own metric. Empirical, and generous on
+// purpose: the farthest cells have the hardest-to-predict periods.
 static const float PERIODS_PER_RADIUS = 90.0f;
 static const int   MIN_AUTO_PERIOD = 24;
 static const int   MAX_AUTO_PERIOD = 1600;   // cost is linear in this; somewhere it has to stop
@@ -421,6 +367,9 @@ static const int   MAX_AUTO_PERIOD = 1600;   // cost is linear in this; somewher
 // own edges are. See where it is used.
 static const float ISLAND_BOUNDARY_DEPTH = 3.0f;
 static const int   MAX_ISLAND_DEPTH = 2000;
+
+// Octaves of return time per trip around the island color wheel.
+static const float ISLAND_PERIOD_OCTAVES = 3.0f;
 
 float OuterBilliardsScene::view_reach(const OuterBilliards& table) {
     const vec2 center = table.centroid();
@@ -454,13 +403,11 @@ int OuterBilliardsScene::auto_island_period(const OuterBilliards& table) {
 
 // How many extra hops flow_auto_depth adds per radius the view reaches past the
 // table, and per doubling of on-screen resolution past the reference below -
-// mirrors auto_island_period's reasoning: a hop is a bounded step, so a point
-// twice as far out, or a boundary examined at twice the pixel density, takes
-// roughly twice as many hops before its long-run color can be trusted. Both
-// constants are empirical, and deliberately conservative: at the reference
-// reach and resolution below they contribute nothing, so a shot that never
-// turns flow_auto_depth on - which is every scripted shot in the codebase
-// today - sees no change at all.
+// mirrors auto_island_period's reasoning: a point twice as far out, or a
+// boundary examined at twice the pixel density, takes roughly twice as many
+// hops before its long-run color can be trusted. Contribute nothing at the
+// reference reach/resolution, so a shot that leaves flow_auto_depth off sees
+// no change at all.
 static const float FLOW_ITERATIONS_PER_RADIUS         = 40.0f;
 static const float FLOW_REFERENCE_PIXELS_PER_RADIUS   = 200.0f;
 static const float FLOW_ITERATIONS_PER_DOUBLING       = 600.0f;
@@ -545,8 +492,6 @@ void OuterBilliardsScene::draw_flow_field(const OuterBilliards& table) {
     const bool auto_depth = state["flow_auto_depth"] > 0.5;
     params.iterations = std::fmax(
         (float)(auto_depth ? auto_flow_iterations(table) : (double)state["flow_iterations"]), 0.0f);
-    params.smooth     = (state["flow_continuous"] > 0.5) ? 1 : 0;
-    params.samples    = std::max(1, std::min(4, (int)state["flow_samples"]));
 
     params.center  = table.centroid();
     // The wheel wants to be saturated across the band the orbits actually live
@@ -605,7 +550,6 @@ void OuterBilliardsScene::draw_singularity_graph(const OuterBilliards& table) {
     params.depth          = depth;
     params.line_width     = (float)state["singularity_width"];
     params.glow           = (float)state["singularity_glow"];
-    params.fade           = (float)state["singularity_fade"];
     params.rainbow        = (float)state["singularity_rainbow"];
     params.rainbow_period = std::fmax((float)state["singularity_rainbow_period"], 1e-3f);
     params.line_color     = singularity_color;
@@ -618,7 +562,7 @@ void OuterBilliardsScene::draw_singularity_graph(const OuterBilliards& table) {
     // Three times over is enough to separate them from the real islands, which
     // stay open at any depth.
     params.island_depth   = std::min((int)std::ceil(depth * ISLAND_BOUNDARY_DEPTH), MAX_ISLAND_DEPTH);
-    params.period_octaves = std::fmax((float)state["island_period_scale"], 1e-3f);
+    params.period_octaves = ISLAND_PERIOD_OCTAVES;
 
     outer_billiards_singularity_render(gpu_pix.get_ptr(), panel_wh, params);
 }
@@ -694,7 +638,7 @@ void OuterBilliardsScene::draw_orbit(const OrbitSpec& orbit, const OuterBilliard
 
     // The whole part of the hop count is how many hops have landed; the fraction
     // is how far along the next one the moving head has travelled.
-    const double count = state[orbit_var(orbit.name, "iterations")];
+    const double count = state["iterations"];
     const int whole = (count > 0.0) ? (int)std::floor(count) : 0;
     const float partial = (count > 0.0) ? (float)(count - whole) : 0.0f;
     const bool wants_partial = partial > 1e-4f;
@@ -713,7 +657,11 @@ void OuterBilliardsScene::draw_orbit(const OrbitSpec& orbit, const OuterBilliard
     const float rainbow_period = std::fmax((float)state["rainbow_period"], 1e-3f);
 
     // The hops themselves. Each one is a straight segment whose midpoint is the
-    // table vertex it turned about.
+    // table vertex it turned about, and once drawn it never moves again unless
+    // the table or the start point does. The one in-progress hop, if any,
+    // simply extends toward its endpoint (a plain lerp) rather than swinging
+    // around the pivot (outer_billiards_turn) - a hop reads as a line being
+    // traced out, not as the point orbiting its corner mid-flight.
     for (int k = 0; k < hops; k++) {
         const vec2 from = path[k];
         vec2 to = path[k + 1];
@@ -747,9 +695,13 @@ void OuterBilliardsScene::draw_orbit(const OrbitSpec& orbit, const OuterBilliard
 void OuterBilliardsScene::draw() {
     panel_wh = get_width_height();
 
-    // The panel arrives zeroized to fully transparent; lay the background down
-    // before anything else goes on it.
-    if (background_color != 0) cuda_fill_pixels(gpu_pix.get_ptr(), panel_wh, background_color);
+    // No fill here: the panel is left fully transparent. Every draw call below
+    // uses plain "over" compositing, which is associative, so the exported
+    // video comes out the same as filling to black here would have - Main.cpp's
+    // global video_background_color is what it composites onto at encode time.
+    // open_ui()'s live preview skips that encode-time step, though, so anything
+    // drawn below full opacity previews lighter/rawer there than it will
+    // actually render.
 
     // Rebuild the table from the vertex variables as they stand this frame, and
     // with it every orbit and the whole fractal - which is what makes all of them

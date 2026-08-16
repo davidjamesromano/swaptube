@@ -11,78 +11,42 @@
 // Outer billiards, drawn on a coordinate plane. See DataObjects/OuterBilliards.h
 // for what the map actually is.
 //
-// The scene draws up to five layers, back to front, each one independently
-// animatable and all of them off by default except the table:
+// Five layers, back to front, each independently animatable and all off by
+// default except the table:
 //
-//   THE FLOW       the plane painted with a color wheel, each pixel recolored
-//                  with the color of wherever its own orbit has reached. Order,
-//                  chaos and escape all read off it directly; see fade_flow().
-//                  How grainy it gets is decided by the TABLE and the FRAMING,
-//                  not by the hop count - a regular polygon is almost all large
-//                  periodic islands whatever you do, and a generic one is almost
-//                  all mosaic. Both were measured; see OrderAndChaos.cpp.
+//   THE FLOW    the plane painted with a color wheel, each pixel recolored
+//               with the color of wherever its own orbit has reached - see
+//               fade_flow(). How grainy it gets is decided by the table and
+//               the framing, not the hop count (see OrderAndChaos.cpp).
+//   THE ISLANDS a flat color in each region the singularity graph never
+//               reaches, hued by which hop brings the orbit back nearest to
+//               where it set off.
+//   THE WEB     the singularity graph: every point that lands on a ray where
+//               the map is undefined, within some number of hops. Rendered
+//               per-pixel on the GPU.
+//   THE RAYS    just the n rays themselves, drawn crisply as vectors.
+//   THE TABLE   the polygon, and orbits hopping around it.
 //
-//   THE ISLANDS    a flat color in each region the singularity graph never
-//                  reaches, hued by which hop brings the orbit back nearest to
-//                  where it set off. Filled right up to the graph, which bounds
-//                  them - islands are defined as its gaps, not by asking whether
-//                  an orbit is periodic, because in a curved plane none of them
-//                  quite is (see OuterBilliardsShared.h).
-//   THE WEB        the singularity graph: every point that lands on a ray where
-//                  the map is undefined, within some number of hops. This is the
-//                  fractal, and it is rendered per-pixel on the GPU.
-//   THE RAYS       just the n rays themselves - the first layer of the web, drawn
-//                  crisply as vectors, for pointing at.
-//   THE TABLE      the polygon, and orbits hopping around it.
-//
-// Everything that moves is a state variable, so any of it can be animated with
-// manager.transition() - and the ones the framework is built around have
-// wrappers:
-//
-//   THE TABLE      set_shape() / set_regular_polygon() install a polygon and
-//                  publish "v0.x", "v0.y", "v1.x", ... one pair per vertex.
-//                  move_vertex() animates one corner, morph_shape() animates all
-//                  of them at once into another polygon with the same number of
-//                  corners. Everything else is recomputed from the vertices every
-//                  frame, so the orbits AND the fractal reshape live as the table
-//                  deforms.
-//
-//   THE START      add_orbit() publishes "<name>.x", "<name>.y" for a point to
-//                  set off from, plus "<name>.opacity" and "<name>.iterations".
-//                  move_start() animates where it sets off from. Any number of
-//                  orbits can share the table; they all read the same vertices.
-//
-//   THE COUNT      "iterations" is how many hops to draw, and it is a REAL
-//                  number: the whole part is how many hops are complete and the
-//                  fraction draws the next one partway, so ramping it looks like
-//                  the orbit being traced out rather than snapping hop to hop.
-//                  Each orbit's "<name>.iterations" defaults to following it.
-//
-//   THE DEPTH      "singularity_depth" is how many preimages of the rays to
-//                  draw, and it is real in the same way: layer k fades in as the
-//                  depth crosses k, so grow_singularities() unfolds the fractal
-//                  smoothly instead of a layer at a time. This is the expensive
-//                  knob - cost is linear in it - but 200 layers at 1080p is
-//                  still a few milliseconds.
-//
-//   THE PLANE      "curvature" is 0 for the Euclidean plane and negative for the
-//                  hyperbolic plane of that curvature, drawn in the Beltrami-
-//                  Klein model - where geodesics are straight chords, so every
-//                  layer above keeps working unchanged and only the reflection
-//                  and the distances differ. Animate it with bend_space() and
-//                  the plane curls into a disk while the fractal reorganizes
-//                  into a hyperbolic tiling.
+// Everything that moves is a state variable, animatable with
+// manager.transition(); the knobs central to the design have wrappers:
+// set_shape()/set_regular_polygon() (the table), add_orbit()/move_start()
+// (where an orbit sets off from), iterate_to() ("iterations", how many hops -
+// real, so the fraction draws the next hop partway), grow_singularities()
+// ("singularity_depth", same real-valued unfolding), and bend_space()
+// ("curvature": 0 Euclidean, negative hyperbolic in the Beltrami-Klein model -
+// see OuterBilliardsShared.h).
 //
 // Other state variables, all with sensible defaults: shape_opacity,
 // shape_fill_opacity, vertex_dot_size, orbit_opacity, dot_size, line_thickness,
-// orbit_fade (dim the older hops), pivot_opacity (mark the vertex each hop turns
-// about), rainbow and rainbow_period (tint hops by age), ray_opacity,
+// orbit_fade (dim the older hops), pivot_opacity (mark the vertex each hop
+// turns about), rainbow/rainbow_period (tint hops by age), ray_opacity,
 // horizon_opacity, singularity_opacity, singularity_width, singularity_glow,
-// singularity_fade,
-// singularity_rainbow, singularity_rainbow_period, island_opacity,
-// island_max_period, island_period_scale. Panning and zooming come from
-// CoordinateScene: center_x, center_y, zoom - or use frame_view(), which works in
-// world units.
+// singularity_rainbow/singularity_rainbow_period, island_opacity,
+// island_max_period (0 sizes it from the shot), poincare_view (draw the
+// Poincare disk instead of Klein's straight chords), flow_scale,
+// flow_shade_by_distance, flow_auto_depth. Panning and zooming come from
+// CoordinateScene: center_x, center_y, zoom - or use frame_view(), in world
+// units.
 // ---------------------------------------------------------------------------
 class OuterBilliardsScene : public CoordinateScene {
 public:
@@ -110,104 +74,78 @@ public:
     // color 0 means "use orbit_color".
     void add_orbit(const std::string& name, const vec2& start, uint32_t color = 0);
     void remove_orbit(const std::string& name);
-    bool has_orbit(const std::string& name) const;
 
     void move_start(const TransitionType tt, const std::string& name, const vec2& to, bool smooth = true);
     void move_start(const TransitionType tt, const vec2& to, bool smooth = true);   // the default orbit
-    vec2 start_of(const std::string& name) const;                                   // where it is headed
 
     void fade_orbit(const TransitionType tt, const std::string& name, double opacity);
-    void set_orbit_color(const std::string& name, uint32_t color);
 
     static std::string orbit_var(const std::string& name, const std::string& axis);
 
     // --- how many hops ---------------------------------------------------
+    // "iterations": whole part is completed hops, fraction draws the next one
+    // partway - every orbit shares this count.
     void set_iterations(double count);
     void iterate_to(const TransitionType tt, double count, bool smooth = true);
-    // Give one orbit its own hop count, or hand it back to the global one.
-    void iterate_orbit_to(const TransitionType tt, const std::string& name, double count, bool smooth = true);
-    void follow_global_iterations(const TransitionType tt, const std::string& name);
 
     // --- the singularity graph -------------------------------------------
     // Show the n rays where the map itself is undefined - the seed the whole
     // fractal is grown from.
     void fade_rays(const TransitionType tt, double opacity, bool smooth = true);
 
-    // Set the depth outright, or unfold the web to it. Depth is real; see the
-    // header comment. grow_singularities() also turns the layer on if it is off,
+    // Set the depth outright, or unfold the web to it. Depth is real, same as
+    // iterations. grow_singularities() also turns the layer on if it is off,
     // so it is usually the only call a shot needs.
     void set_singularity_depth(double depth);
     void grow_singularities(const TransitionType tt, double depth, bool smooth = true);
     void fade_singularities(const TransitionType tt, double opacity, bool smooth = true);
 
-    // The regions the web never reaches, filled by period. Cost is linear in
-    // island_max_period, which is why that is a separate knob from the depth -
-    // but 0 (the default) sizes it from the shot, which is what you want unless
-    // you are deliberately trading completeness for speed.
+    // The regions the web never reaches, filled by period. "island_max_period"
+    // (0 by default, sizing it from the shot) is a plain state variable, not
+    // wrapped here - cost is linear in it, so raise it by hand only if the
+    // auto-sized search is visibly leaving corners unshaded.
     void fade_islands(const TransitionType tt, double opacity, bool smooth = true);
-    void set_island_max_period(int max_period);
 
     // --- where every point goes ------------------------------------------
-    // Paints the plane with a color wheel and then recolors each pixel with the
-    // color of wherever ITS orbit has got to. Nothing moves; only the coloring
-    // does. Order shows as patches that keep their color, chaos as noise, and an
-    // escaping orbit as a fade to black - the last of which is the state variable
-    // flow_shade_by_distance (default on); turn it off and the wheel is hue
-    // alone, full strength everywhere, which is order and chaos with nothing else
-    // competing for the eye. See FlowFieldParams in
+    // Paints the plane with a color wheel, then recolors each pixel with the
+    // color of wherever ITS orbit has got to - order shows as patches that
+    // keep their color, chaos as noise, an escaping orbit as a fade to black
+    // (flow_shade_by_distance, on by default). See FlowFieldParams in
     // Host_Device_Shared/OuterBilliardsShared.h.
     //
-    // flow_to() is the whole show: ramp it linearly and watch the plane sort
-    // itself out. Cost is linear in the count, as everywhere else here.
-    //
-    // RATE MATTERS. A hop is a half turn, so the coloring is completely
-    // rearranged once per unit of flow_iterations. Ramp it faster than about
-    // four or five per second and consecutive frames stop being related to each
-    // other; ramp it slower and the whole thing reads as one continuous motion.
-    // Very little is lost by going slowly, because the picture converges early:
-    // measured on a pentagon, 100 hops and 3200 hops differ by about one part in
-    // a hundred. Deep is cheap to ask for and buys almost nothing.
+    // flow_to() is the whole show: ramp it LINEARLY (never eased) and watch
+    // the plane sort itself out. A hop is a half turn, so the coloring is
+    // completely rearranged once per unit of flow_iterations - faster than
+    // about four or five a second and consecutive frames stop looking related.
+    // The picture converges early (on a pentagon, 100 hops and 3200 hops agree
+    // to about a part in a hundred), so there is little to gain from going deep.
     void fade_flow(const TransitionType tt, double opacity, bool smooth = true);
     void set_flow_iterations(double count);
     void flow_to(const TransitionType tt, double count, bool smooth = false);
-    // True turns continuously through each hop, so the coloring flows; false
-    // holds every whole iterate until the next one lands, so the hops are
-    // countable but the picture jumps. They agree exactly on the whole numbers.
-    // Continuous is the default and is what you want for anything but a slow
-    // count-the-hops beat - see outer_billiards_turn for what "partway through a
-    // hop" has to mean for this to be smooth at all.
-    void set_flow_continuous(bool continuous);
 
-    // Off by default, for backward compatibility with shots that pick
-    // flow_iterations by hand for pacing (see OrderAndChaos.cpp). On, the
-    // iteration count actually sent to the GPU is flow_iterations PLUS however
-    // much more the CURRENT view needs on top of it: panning out toward the
-    // corners of the shot, or zooming in past the resolution flow_iterations was
-    // tuned for, both call for more hops before the coloring is trustworthy at
-    // that depth - see auto_flow_iterations(). Meant for interactive exploration
-    // (open_ui()), where there is no fixed shot to have tuned flow_iterations
-    // for in the first place.
+    // Off by default. On, the iteration count sent to the GPU is
+    // flow_iterations PLUS however much more the CURRENT view needs -
+    // panning past the table or zooming in past the resolution
+    // flow_iterations was tuned for both call for more hops before the
+    // coloring is trustworthy (see auto_flow_iterations()). Meant for
+    // interactive exploration (open_ui()), not scripted shots that already
+    // pick flow_iterations by hand.
     void set_flow_auto_depth(bool on);
 
     // --- which plane all of this lives in --------------------------------
-    // 0 is Euclidean. Negative is the hyperbolic plane of that curvature, drawn
-    // in the Beltrami-Klein model - so geodesics stay straight and the table, the
-    // orbits and the fractal all keep their meaning. bend_space() animates it,
-    // and brings the ideal boundary along with it.
+    // "curvature": 0 Euclidean, negative hyperbolic (Beltrami-Klein model -
+    // geodesics stay straight, every layer above keeps working unchanged).
+    // bend_space() animates it and brings the ideal boundary along.
     //
-    // "poincare_view" (a plain state variable, default off) redraws the same
-    // plane in the Poincare disk model instead - geodesics bow into arcs, which
-    // is the more familiar hyperbolic picture - without touching the map, the
-    // metric or the ideal boundary, which stays the same shared circle either
-    // way. See OuterBilliardsShared.h.
+    // "poincare_view" (plain state variable, off by default) redraws the same
+    // plane in the Poincare disk model instead - geodesics bow into arcs -
+    // without touching the map, the metric, or the ideal boundary.
     void set_curvature(double curvature);
     void bend_space(const TransitionType tt, double curvature, bool smooth = true);
 
-    // The two ways of naming the same thing: the ideal boundary's radius, and the
-    // curvature that puts it there. Handy for sizing a shot - bend_space() takes
-    // a curvature, but "I want the whole plane to fit in a disk of radius 3" is
-    // usually the thought.
-    static double horizon_for(double curvature);
+    // The ideal boundary's radius for a given curvature - the inverse of
+    // bend_space()'s input, handy for sizing a shot ("fit the whole plane in a
+    // disk of radius 3").
     static double curvature_for_horizon(double horizon);
 
     // --- framing ---------------------------------------------------------
@@ -218,7 +156,6 @@ public:
     void frame_view(const TransitionType tt, const vec2& center, float half_height, bool smooth = true);
 
     // --- appearance (not animatable; opacities are, above) ---------------
-    uint32_t background_color = OPAQUE_BLACK;
     uint32_t table_color      = 0xffffc040;   // outline and vertices
     uint32_t table_fill_color = 0xff704818;
     uint32_t orbit_color      = 0xff40d8ff;   // default for orbits added without one

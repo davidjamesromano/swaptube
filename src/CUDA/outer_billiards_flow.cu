@@ -4,28 +4,15 @@
 // thread - see FlowFieldParams in Host_Device_Shared/OuterBilliardsShared.h for
 // what the picture means.
 //
-// The plane is painted with a color wheel: hue from the direction, white at the
-// middle, black at infinity. Each pixel is then given the color of the place its
-// own orbit has reached after n hops. The pixel does not move; its color does.
+// The plane is painted with a color wheel: hue from direction, white at the
+// middle, black at infinity. Each pixel is then given the color of the place
+// its own orbit has reached after n hops - the pixel does not move, its color
+// does. A periodic island stays a coherent patch of color; a chaotic region
+// shreds into noise; an orbit headed to infinity darkens.
 //
-// Reading it:
-//
-//   COHERENT PATCHES  a region where the iterate is a rigid motion - a periodic
-//                     island. The wheel is carried around intact, so the patch
-//                     keeps its shape and its color no matter how far n runs.
-//   NOISE             a region where nearby points separate. Pixels that began
-//                     as neighbours end up unrelated, and the coloring shreds.
-//   DARKENING         an orbit on its way to infinity, running off the bright end
-//                     of the wheel.
-//
-// Because the whole point is that adjacent pixels disagree, this does NOT
-// antialias by default: averaging chaos gives grey, which is a different (and
-// also interesting) picture, so `samples` is left at 1 unless a caller asks.
-//
-// `iterations` is real, and the fractional part is spent TURNING - see
-// outer_billiards_turn. That matters more than it sounds: it is what makes this
-// safe to animate at all. The map is a half turn about a vertex, so a
-// half-finished hop is a quarter turn, and the coloring moves continuously
+// `iterations` is real, and the fractional part is spent TURNING (see
+// outer_billiards_turn), which is what makes this safe to animate: a
+// half-finished hop is a quarter turn, so the coloring moves continuously
 // instead of jumping between whole iterates.
 // ---------------------------------------------------------------------------
 
@@ -40,24 +27,22 @@
 #define FLOW_MIN_OPACITY BILLIARDS_MIN_OPACITY
 
 // The color wheel the plane is painted with, as a function of position.
-//
 // Distance is read as latitude on a sphere whose pole is the center and whose
 // other pole is infinity: white at the middle, saturating to a full hue at
-// `scale`, then darkening away to black. So a point that has run off carries no
-// color at all, which is exactly what should happen to an orbit that escapes.
+// `scale`, then darkening to black - so an orbit that has run off carries no
+// color at all.
 __device__ __forceinline__ uint32_t flow_wheel(const Cuda::vec2& q, const Cuda::vec2& center,
                                                float scale, float curvature, int shade_by_distance) {
     const Cuda::vec2 offset = q - center;
 
-    // Direction is the Euclidean angle even in a curved plane: geodesics through
-    // the center are straight in these coordinates, so for a wheel centered on
-    // the table this is the geodesic bearing.
+    // Direction is the Euclidean angle even in a curved plane: geodesics
+    // through the center are straight in these coordinates.
     float hue = atan2f(offset.y, offset.x) * 0.15915494f;   // / 2 pi
     if (hue < 0.0f) hue += 1.0f;
 
     if (!shade_by_distance) return Cuda::HSVtoRGB(hue, 1.0f, 1.0f);
 
-    // Distance in the plane's own metric, so the wheel does not stretch when the
+    // Distance in the plane's own metric, so the wheel does not stretch when
     // curvature is animated.
     const float radius = Cuda::curved_distance(center, q, curvature);
     const float latitude = 0.63661977f * atanf(radius / fmaxf(scale, 1e-6f));   // 2/pi * atan, in [0,1)
@@ -77,86 +62,49 @@ __global__ void flow_field_kernel(
     const int py = blockIdx.y * blockDim.y + threadIdx.y;
     if (px >= wh.x || py >= wh.y) return;
 
-    const Cuda::vec2 wh_f(wh.x, wh.y);
-    const int side = params.samples < 1 ? 1 : params.samples;
-    const float step = 1.0f / (float)side;
+    Cuda::vec2 p = Cuda::pixel_to_point_in_screen(
+        Cuda::vec2((float)px + 0.5f, (float)py + 0.5f), params.lx_ty, params.rx_by, Cuda::vec2(wh.x, wh.y));
 
-    float red = 0.0f, green = 0.0f, blue = 0.0f;
-    int taken = 0;
-
-    for (int sy = 0; sy < side; sy++) {
-        for (int sx = 0; sx < side; sx++) {
-            const Cuda::vec2 sample((float)px + ((float)sx + 0.5f) * step,
-                                    (float)py + ((float)sy + 0.5f) * step);
-            Cuda::vec2 p = Cuda::pixel_to_point_in_screen(sample, params.lx_ty, params.rx_by, wh_f);
-
-            // A pixel is a Poincare-disk coordinate instead of a Klein one, so
-            // swap in the Klein point of the same abstract place before any of
-            // the math below - which stays entirely in Klein coordinates, same
-            // as always.
-            if (params.poincare_view != 0) {
-                const float horizon = params.curvature < 0.0f ? 1.0f / sqrtf(-params.curvature) : 0.0f;
-                p = Cuda::poincare_to_klein(p, horizon);
-            }
-
-            // Inside the table, or outside the plane, there is no orbit to follow.
-            if (Cuda::outer_billiards_pivot(params.verts, params.n, p, params.curvature) < 0) continue;
-
-            // An unbounded orbit (see outer_billiards_singularity.cu's kite, or
-            // any table in a curved plane whose points climb toward the ideal
-            // boundary) grows every hop, and nothing bounds how far - a fixed
-            // iteration count never used to run long enough for that to matter,
-            // but flow_auto_depth can now ask for tens of thousands of hops. Once
-            // a point is this far out it is already reading as escaped (flow_wheel
-            // fades it toward black by distance), so stopping here changes
-            // nothing about the picture - it only keeps the float32 arithmetic in
-            // outer_billiards_reflect from compounding past what it can represent.
-            // Past that point `curved_norm` can hit `curvature * inf`, which is
-            // NaN even for curvature == 0, and one NaN pixel is a visible fleck
-            // no amount of extra depth would ever fix.
-            const float ESCAPE_RADIUS_SQ = 1e12f;
-            for (int k = 0; k < whole; k++) {
-                const Cuda::vec2 next = Cuda::outer_billiards_hop(params.verts, params.n, p, params.curvature);
-                if (!(Cuda::dot(next, next) < ESCAPE_RADIUS_SQ)) break;   // also catches nan/inf: comparison is false
-                p = next;
-            }
-
-            // The fraction either carries the destination partway through the hop
-            // it is in the middle of - so the coloring flows continuously - or is
-            // ignored, holding each whole iterate until the next one lands. Both
-            // agree exactly on the whole numbers; only the way between differs.
-            //
-            // Partway through a hop means partway through the TURN. A hop is a
-            // half turn about the pivot, so half a hop is a quarter turn about
-            // it, and every point of the wedge is still somewhere different.
-            // Sliding along the chord from p to T(p) instead would send the whole
-            // wedge through its own pivot at the halfway mark - see
-            // outer_billiards_turn.
-            Cuda::vec2 destination = p;
-            if (params.smooth != 0 && fraction > 1e-4f) {
-                const int pivot = Cuda::outer_billiards_tangent_vertex(params.verts, params.n, p);
-                destination = Cuda::outer_billiards_turn(params.verts[pivot], p, params.curvature,
-                                                         fraction * 3.14159265f);
-            }
-
-            const uint32_t color = flow_wheel(destination, params.center, params.scale, params.curvature,
-                                              params.shade_by_distance);
-            red   += Cuda::getr(color);
-            green += Cuda::getg(color);
-            blue  += Cuda::getb(color);
-            taken++;
-        }
+    // A pixel is a Poincare-disk coordinate instead of a Klein one, so swap in
+    // the Klein point of the same abstract place before any of the math below
+    // - which stays entirely in Klein coordinates, same as always.
+    if (params.poincare_view != 0) {
+        const float horizon = params.curvature < 0.0f ? 1.0f / sqrtf(-params.curvature) : 0.0f;
+        p = Cuda::poincare_to_klein(p, horizon);
     }
 
-    if (taken == 0) return;   // every sample landed on the table; leave the pixel alone
+    // Inside the table, or outside the plane, there is no orbit to follow.
+    if (Cuda::outer_billiards_pivot(params.verts, params.n, p, params.curvature) < 0) return;
 
-    const float share = 1.0f / (float)taken;
-    const uint32_t color = Cuda::argb(255, (int)(red * share), (int)(green * share), (int)(blue * share));
+    // An unbounded orbit, or any table in a curved plane whose points climb
+    // toward the ideal boundary, grows every hop with nothing to bound it -
+    // flow_auto_depth can ask for tens of thousands of hops, and past this
+    // radius the picture already reads as escaped (flow_wheel fades it toward
+    // black), so stopping here changes nothing about the picture. It only
+    // keeps outer_billiards_reflect's float32 arithmetic from compounding into
+    // NaN, which even one pixel of would be a visible fleck.
+    const float ESCAPE_RADIUS_SQ = 1e12f;
+    for (int k = 0; k < whole; k++) {
+        const Cuda::vec2 next = Cuda::outer_billiards_hop(params.verts, params.n, p, params.curvature);
+        if (!(Cuda::dot(next, next) < ESCAPE_RADIUS_SQ)) break;   // also catches nan/inf: comparison is false
+        p = next;
+    }
 
-    // Samples that missed the plane do not darken the ones that hit it; they just
-    // do not vote, so the edge of the table stays clean.
-    const float coverage = (float)taken / (float)(side * side);
-    overlay_pixel(Cuda::ivec2(px, py), color, params.opacity * coverage, pixels, wh);
+    // The fraction carries the destination partway through the hop it is in
+    // the middle of, so the coloring flows continuously. Partway through a hop
+    // means partway through the TURN (see outer_billiards_turn) - sliding along
+    // the chord to T(p) instead would send the whole wedge through its own
+    // pivot at the halfway mark.
+    Cuda::vec2 destination = p;
+    if (fraction > 1e-4f) {
+        const int pivot = Cuda::outer_billiards_tangent_vertex(params.verts, params.n, p);
+        destination = Cuda::outer_billiards_turn(params.verts[pivot], p, params.curvature,
+                                                 fraction * 3.14159265f);
+    }
+
+    const uint32_t color = flow_wheel(destination, params.center, params.scale, params.curvature,
+                                      params.shade_by_distance);
+    overlay_pixel(Cuda::ivec2(px, py), color, params.opacity, pixels, wh);
 }
 
 extern "C" void outer_billiards_flow_render(

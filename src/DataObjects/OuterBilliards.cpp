@@ -48,20 +48,6 @@ std::vector<vec2> OuterBilliards::orbit(const vec2& start, int steps, std::vecto
     return path;
 }
 
-int OuterBilliards::period(const vec2& start, int max_period, float tolerance) const {
-    if (max_period < 1 || pivot_index(start) < 0) return 0;
-    const float tolerance_sq = tolerance * tolerance;
-    vec2 p = start;
-    for (int i = 1; i <= max_period; i++) {
-        int pivot = -1;
-        p = step(p, &pivot);
-        if (pivot < 0) return 0;
-        const vec2 back = p - start;
-        if (dot(back, back) < tolerance_sq) return i;
-    }
-    return 0;
-}
-
 std::vector<vec2> OuterBilliards::counterclockwise() const {
     std::vector<vec2> wound = vertices;
     if (wound.size() >= 3 && billiards_double_signed_area(wound.data(), (int)wound.size()) < 0.0f) {
@@ -115,12 +101,6 @@ std::vector<OuterBilliards::Ray> OuterBilliards::singular_rays(float reach) cons
         rays.push_back({origin, direction, span});
     }
     return rays;
-}
-
-float OuterBilliards::singular_distance(const vec2& p) const {
-    const std::vector<SingularRay> rays = singular_ray_data();
-    if (rays.empty()) return 1e30f;
-    return outer_billiards_singular_distance(rays.data(), (int)rays.size(), p, curvature);
 }
 
 vec2 OuterBilliards::centroid() const {

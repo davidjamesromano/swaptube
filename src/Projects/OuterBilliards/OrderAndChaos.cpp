@@ -1,4 +1,5 @@
 #include "../Scenes/Math/OuterBilliardsScene.h"
+#include "OuterBilliards/OuterBilliardsTables.h"
 
 // ---------------------------------------------------------------------------
 // Order, chaos, and escape in outer billiards - by coloring the plane with where
@@ -6,91 +7,33 @@
 //
 //     .\go.ps1 OrderAndChaos 1920 1080 30 -n
 //
-// Paint the exterior with a color wheel: hue from the direction, white at the
+// Paint the exterior with a color wheel: hue from direction, white at the
 // middle, fading to black far out. Then leave every pixel exactly where it is
 // and give it the color of the place its own orbit has reached after n hops.
-// Nothing on screen moves. Only the coloring does.
 //
-//   ORDER    On a periodic island the n'th iterate is a rigid motion, so the
-//            wheel is carried around intact. The patch keeps its shape and its
-//            colors however far n runs - it just turns.
-//   CHAOS    Where the singular rays keep cutting a region into finer and finer
-//            pieces, each piece is carried off somewhere unrelated, and the
-//            coloring breaks up into a mosaic and then into grain.
-//   ESCAPE   An orbit on its way to infinity runs off the bright end of the
-//            wheel and fades to black.
+//   ORDER    a periodic island's n'th iterate is a rigid motion, so the wheel
+//            is carried around intact and the patch stays coherent forever.
+//   CHAOS    where singular rays keep cutting a region finer, neighbouring
+//            pieces are carried off unrelated, and the coloring turns to grain.
+//   ESCAPE   an orbit headed to infinity runs off the bright end of the wheel
+//            and fades to black.
 //
+// TWO MEASURED FACTS decide how this file is written:
+//
+// 1. THE HOP COUNT BARELY MATTERS past a couple hundred hops - outer billiards
+//    is a piecewise ISOMETRY, so neighbouring points only separate when a
+//    singular ray passes between them, and the coloring converges rather than
+//    degenerating. Running deeper costs time linearly and buys little.
+// 2. THE TABLE, then the FRAMING, are what decide how broken-up it looks. A
+//    regular polygon is quasi-rational - almost every point is periodic, in
+//    enormous islands - so it cannot look like noise at any depth; take the
+//    table off the lattice and the islands go away, and pulling the camera
+//    back turns the remaining mosaic to grain once it gets finer than a pixel.
+//
+// RATE: a hop is a half turn, so one unit of flow_iterations completely
+// rearranges the coloring. Everything here stays at 3 hops/second or below,
+// or consecutive frames stop looking related.
 // ---------------------------------------------------------------------------
-// TWO THINGS THAT WERE MEASURED, because both are counterintuitive and both
-// decide how this file is written.
-// ---------------------------------------------------------------------------
-//
-// 1. THE HOP COUNT BARELY MATTERS. Past a couple of hundred hops the picture
-//    stops changing. Sweeping a pentagon from 400 to 3200 moved the difference
-//    between neighbouring pixels by about one part in a hundred; the same sweep
-//    on a generic quadrilateral moved it by four parts in a thousand. Outer
-//    billiards is a piecewise ISOMETRY - neighbouring points never separate
-//    exponentially, only when a singular ray passes between them - so the
-//    coloring converges instead of degenerating. Running deeper costs time
-//    linearly and buys nothing. Hence the modest targets below.
-//
-//    What DOES decide how broken-up it looks:
-//
-// 2. THE TABLE, and then the FRAMING. Measured as a fraction of the difference
-//    a genuine white-noise image of the same palette would show between
-//    neighbouring pixels:
-//
-//                        framed at 6      framed at 25
-//        regular pentagon     3-5%             9-12%
-//        regular heptagon     7%               15%
-//        kite                 7-8%             30%
-//        generic quadrilateral 10%             40%
-//
-//    A regular polygon is quasi-rational: almost every point of the plane is
-//    periodic, and the periodic islands are enormous - the pentagon's picture is
-//    a packing of giant flat disks with a thin fractal gasket between them. It
-//    cannot look like noise, at any depth, because there is almost nothing there
-//    to be noisy. Take the table off the lattice and off the regular polygons
-//    and the islands go away; pull the camera back and what is left goes to
-//    grain, because the mosaic gets finer than a pixel. Those two levers, not
-//    the iteration count, are what this file uses.
-//
-// ---------------------------------------------------------------------------
-// RATE. A hop is a half turn about a vertex, so one unit of flow_iterations
-// completely rearranges the coloring. Ramped fast, consecutive frames are
-// unrelated and the whole thing strobes. Everything here is held at 3 hops per
-// second or below, and the fraction of a hop is spent TURNING (see
-// outer_billiards_turn) rather than sliding toward the destination - sliding
-// would put every point of a wedge on its own pivot at the halfway mark and
-// flatten the screen to one color per wedge, twice per hop.
-//
-// The knobs, both on the scene:
-//   flow_continuous  1 turns through each hop so the coloring flows; 0 holds
-//                    every whole iterate, which is countable but jumps.
-//   flow_samples     1 leaves the mosaic as raw per-pixel grain, which is the
-//                    honest picture. Raise it and the grain averages to grey -
-//                    also a real signal, and much kinder to a video encoder.
-// ---------------------------------------------------------------------------
-
-// The kite K(A) Schwartz works with: vertices (-1,0), (0,1), (A,0), (0,-1).
-// Any irrational A in (0,1) has unbounded orbits; this is one.
-static const float KITE_A = 0.41421356f;   // sqrt(2) - 1
-
-static std::vector<vec2> kite(float a) {
-    return {vec2(-1, 0), vec2(0, -1), vec2(a, 0), vec2(0, 1)};
-}
-
-// A quadrilateral with nothing going for it: corners at no particular angles and
-// no particular radii, so it is neither a lattice polygon nor a regular one nor
-// an affine image of either. That is the entire specification, and it is what
-// makes the third act look the way it does.
-static std::vector<vec2> generic_quad() {
-    const float angle[4]  = {0.00f, 1.51f, 2.97f, 4.44f};
-    const float radius[4] = {1.00f, 0.93f, 1.07f, 0.97f};
-    std::vector<vec2> v;
-    for (int i = 0; i < 4; i++) v.push_back(vec2(radius[i] * cosf(angle[i]), radius[i] * sinf(angle[i])));
-    return v;
-}
 
 void render_video() {
     OuterBilliardsScene bs;

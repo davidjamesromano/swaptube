@@ -1,47 +1,27 @@
 #include "../Scenes/Math/OuterBilliardsScene.h"
+#include "OuterBilliards/OuterBilliardsTables.h"
 
 // ---------------------------------------------------------------------------
 // OrderAndChaos.cpp, run entirely in the hyperbolic plane instead of the flat
 // one - same four tables, same color-wheel-carried-by-the-map idea, but drawn
-// in the Beltrami-Klein model throughout. See OuterBilliardsShared.h for what
-// changes under curvature (the reflection and the distances) and what does
-// not (everything stays a straight line).
+// in the Beltrami-Klein model throughout (see OuterBilliardsShared.h for what
+// changes under curvature and what does not).
 //
 //     .\go.ps1 OrderAndChaosHyperbolic 1920 1080 30 -n
 //
-// ONE THING THAT DOES NOT PORT OVER: in the flat film, "pull the camera back"
-// is what reveals finer mosaic, because further out literally is further out.
-// Here the whole plane - all of it, no matter how far - already sits inside
-// the horizon disk at a fixed screen radius; pulling back past that shows
-// nothing new, there is nothing outside the circle to see. The lever that
-// does the same job is flow_scale: it is measured in the plane's own curved
-// metric (see flow_wheel in outer_billiards_flow.cu), not in screen pixels,
-// so growing it sweeps the color wheel's white middle out toward the horizon
-// exactly the way pulling the camera back swept it outward in the flat film -
-// except the frame never has to move, because everything was always in it.
-// And however large scale gets, curved_distance still blows up approaching
-// the boundary, so there is always a thin black ring right at the true edge:
-// the one landmark the flat picture never had.
+// ONE THING THAT DOES NOT PORT OVER: in the flat film, pulling the camera back
+// reveals finer mosaic. Here the whole plane already sits inside the horizon
+// disk at a fixed screen radius, so pulling back shows nothing new. flow_scale
+// does the same job instead - measured in the plane's own curved metric, not
+// screen pixels, so growing it sweeps the color wheel's white middle out
+// toward the horizon without the frame ever moving. However large scale gets,
+// curved_distance still blows up approaching the boundary, so there is always
+// a thin black ring at the true edge - a landmark the flat picture never had.
 //
-// THE KITE. Schwartz's unbounded-orbit construction is a fact about the flat
-// plane specifically; nothing here claims it survives into a curved one, so
-// the kite appears as what it visibly is - an off-lattice, non-regular
-// quadrilateral - without asserting anything about where its orbits end up.
+// THE KITE appears as what it visibly is - an off-lattice, non-regular
+// quadrilateral - without claiming Schwartz's flat-plane unbounded-orbit
+// result survives into a curved one.
 // ---------------------------------------------------------------------------
-
-static const float KITE_A = 0.41421356f;   // sqrt(2) - 1
-
-static std::vector<vec2> kite(float a) {
-    return {vec2(-1, 0), vec2(0, -1), vec2(a, 0), vec2(0, 1)};
-}
-
-static std::vector<vec2> generic_quad() {
-    const float angle[4]  = {0.00f, 1.51f, 2.97f, 4.44f};
-    const float radius[4] = {1.00f, 0.93f, 1.07f, 0.97f};
-    std::vector<vec2> v;
-    for (int i = 0; i < 4; i++) v.push_back(vec2(radius[i] * cosf(angle[i]), radius[i] * sinf(angle[i])));
-    return v;
-}
 
 void render_video() {
     OuterBilliardsScene bs;

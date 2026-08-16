@@ -5,45 +5,30 @@
 #include "../Host_Device_Shared/OuterBilliardsShared.h"
 
 // ---------------------------------------------------------------------------
-// The OUTER billiards map (also called the dual billiards map) about a convex
-// table.
-//
-// Inner billiards sends a ball bouncing around the INSIDE of a table. Outer
-// billiards is its mirror image: the point lives outside, and instead of
-// bouncing off the boundary it pivots about it. From a point p outside the
-// table there are two tangent lines; take the one that leaves the whole table on
-// your left as you look from p toward the touching vertex v, and reflect p
-// through that vertex:
+// The OUTER (dual) billiards map about a convex table: from a point p outside
+// the table there are two tangent lines; take the one that leaves the whole
+// table on your left, and reflect p through the vertex v it touches:
 //
 //     T(p) = 2v - p
 //
-// The hop is a straight segment whose MIDPOINT is the vertex it turned about, so
-// an orbit drawn as a polyline shows its own construction. Because reflection
-// preserves the distance to v, the image is exactly as far out as the source was,
-// and the point circles the table forever without ever landing on it.
+// The hop's MIDPOINT is the vertex it turned about, so an orbit drawn as a
+// polyline shows its own construction, and the point circles the table
+// forever without ever landing on it. A square (or any lattice polygon) makes
+// every orbit periodic; a regular pentagon's orbits are quasiperiodic and fill
+// a self-similar web. Whether some polygon has an orbit that escapes to
+// infinity was open for decades.
 //
-// Whether those orbits stay bounded is the interesting question. A square (or
-// any lattice polygon) makes every orbit periodic - closed necklaces of hops. A
-// regular pentagon does not: its orbits are quasiperiodic and fill an intricate
-// self-similar web. Whether some polygon has an orbit that escapes to infinity
-// was open for decades.
+// Which vertex the tangent line touches changes along n rays - the table's
+// sides extended past their endpoints (singular_rays()) - and everything that
+// eventually LANDS on one of them is the singularity graph, the fractal
+// OuterBilliardsScene renders on the GPU.
 //
-// The map is not defined everywhere. Which vertex the tangent line touches
-// changes as p moves, and it changes exactly along n rays - the sides of the
-// table extended past their endpoints. singular_rays() hands those back, and
-// the set of points that eventually LAND on one of them is the singularity
-// graph, the fractal OuterBilliardsScene renders on the GPU.
-//
-// CURVATURE. Set `curvature` negative and the same table lives in the hyperbolic
-// plane instead, drawn in the Beltrami-Klein model - so the coordinates here
-// still mean what they meant, geodesics are still straight, and only the
-// reflection and the distances change. Zero is the Euclidean plane, exactly.
-// See Host_Device_Shared/OuterBilliardsShared.h for how that is arranged.
-//
-// This class is plain host-side math with no rendering and no state hookup; the
-// arithmetic itself lives in that shared header so that the GPU renderer agrees
-// with it hop for hop. OuterBilliardsScene rebuilds one of these from its
-// animated vertices every frame and asks it for orbits.
+// `curvature` negative puts the same table in the hyperbolic plane instead,
+// drawn in the Beltrami-Klein model: geodesics stay straight, only the
+// reflection and the distances change. See Host_Device_Shared/OuterBilliardsShared.h,
+// which holds the actual arithmetic so the GPU renderer agrees with this class
+// hop for hop. This class itself is plain host-side math with no rendering;
+// OuterBilliardsScene rebuilds one from its animated vertices every frame.
 // ---------------------------------------------------------------------------
 class OuterBilliards {
 public:
@@ -85,16 +70,6 @@ public:
     // one vertex index per hop taken.
     std::vector<vec2> orbit(const vec2& start, int steps, std::vector<int>* pivots_out = nullptr) const;
 
-    // How many hops until the orbit from `start` closes, or 0 if it has not
-    // closed within `max_period`. `tolerance` is how near a return counts as a
-    // return - the map is a piecewise isometry, so an orbit that closes closes
-    // exactly, and the tolerance is only there to absorb rounding.
-    int period(const vec2& start, int max_period, float tolerance = 1e-4f) const;
-
-    // Is p inside the table (where the map has nothing to say)? Answered by the
-    // tangent search itself, so it needs no winding or convexity assumption.
-    bool is_inside(const vec2& p) const { return pivot_index(p) < 0; }
-
     // --- the singular set ------------------------------------------------
     // The same vertices, guaranteed wound counterclockwise. The rays below - and
     // the GPU renderer - depend on the winding; nothing above does.
@@ -111,9 +86,6 @@ public:
     // The same rays as the renderer sees them, ready for
     // outer_billiards_singular_distance. One per vertex, counterclockwise.
     std::vector<SingularRay> singular_ray_data() const;
-
-    // Distance from p to the nearest singular ray, in the plane's own metric.
-    float singular_distance(const vec2& p) const;
 
     vec2 centroid() const;
 
